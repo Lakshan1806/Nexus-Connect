@@ -39,7 +39,9 @@ public class NioChatServer implements Runnable {
     private ServerSocketChannel server;
     private Thread selectorThread;
 
-    public NioChatServer(int port) { this.port = port; }
+    public NioChatServer(int port) {
+        this.port = port;
+    }
 
     public synchronized void start() throws IOException {
         if (running) return;
@@ -56,26 +58,40 @@ public class NioChatServer implements Runnable {
 
     public synchronized void stop() {
         running = false;
-        try { selector.wakeup(); } catch (Exception ignored) {}
-        try { if (server != null) server.close(); } catch (Exception ignored) {}
-        try { if (selector != null) selector.close(); } catch (Exception ignored) {}
-        try { if (selectorThread != null) selectorThread.join(1000); } catch (InterruptedException ignored) {}
+        try {
+            selector.wakeup();
+        } catch (Exception ignored) {
+        }
+        try {
+            if (server != null) server.close();
+        } catch (Exception ignored) {
+        }
+        try {
+            if (selector != null) selector.close();
+        } catch (Exception ignored) {
+        }
+        try {
+            if (selectorThread != null) selectorThread.join(1000);
+        } catch (InterruptedException ignored) {
+        }
         workers.shutdownNow();
         log.info("NIO server stopped");
     }
 
-    @Override public void run() {
+    @Override
+    public void run() {
         try {
             while (running) {
                 selector.select();
                 var it = selector.selectedKeys().iterator();
                 while (it.hasNext()) {
-                    var key = it.next(); it.remove();
+                    var key = it.next();
+                    it.remove();
                     try {
                         if (!key.isValid()) continue;
                         if (key.isAcceptable()) onAccept();
-                        if (key.isReadable())   onRead(key);
-                        if (key.isWritable())   onWrite(key);
+                        if (key.isReadable()) onRead(key);
+                        if (key.isWritable()) onWrite(key);
                     } catch (CancelledKeyException ignored) {
                     } catch (Exception e) {
                         log.error("Key error", e);
@@ -107,7 +123,10 @@ public class NioChatServer implements Runnable {
         SocketChannel ch = (SocketChannel) key.channel();
 
         int n = ch.read(s.readBuf);
-        if (n == -1) { disconnect(s, "EOF"); return; }
+        if (n == -1) {
+            disconnect(s, "EOF");
+            return;
+        }
         if (n == 0) return;
 
         s.readBuf.flip();
@@ -134,7 +153,7 @@ public class NioChatServer implements Runnable {
             ByteBuffer buf = s.writeQueue.peek();
             if (buf == null) break;
             ch.write(buf);
-            if (buf.hasRemaining()) break;       
+            if (buf.hasRemaining()) break;
             s.writeQueue.poll();
         }
         if (s.writeQueue.isEmpty()) {
@@ -404,14 +423,32 @@ public class NioChatServer implements Runnable {
             s.key.cancel();
             s.ch.close();
             log.info("Disconnected {} ({})", s.username != null ? s.username : s.ch, reason);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
+
     private void closeKey(SelectionKey key) {
         try {
             Session s = (Session) key.attachment();
             if (s != null) disconnect(s, "error");
-            else { key.channel().close(); key.cancel(); }
-        } catch (IOException ignored) {}
+            else {
+                key.channel().close();
+                key.cancel();
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static String str(Object o) {
+        return o == null ? null : String.valueOf(o);
+    }
+
+    private static Integer intOrNull(Object o) {
+        try {
+            return o == null ? null : Integer.parseInt(String.valueOf(o));
+        } catch (Exception e) {
+            return null;
+        }
     }
     private static Integer intOrNull(String value) {
         try {
@@ -434,10 +471,20 @@ public class NioChatServer implements Runnable {
         final ByteBuffer readBuf = ByteBuffer.allocateDirect(READ_BUF);
         final StringBuilder lineBuffer = new StringBuilder(2048);
         final Deque<ByteBuffer> writeQueue = new ArrayDeque<>();
-        volatile String username; volatile String ip; volatile int fileTcp=-1; volatile int voiceUdp=-1;
+        volatile String username;
+        volatile String ip;
+        volatile int fileTcp = -1;
+        volatile int voiceUdp = -1;
 
-        Session(SocketChannel ch, SelectionKey key){ this.ch = ch; this.key = key; }
-        boolean isAuthed(){ return username != null; }
+        Session(SocketChannel ch, SelectionKey key) {
+            this.ch = ch;
+            this.key = key;
+        }
+
+        boolean isAuthed() {
+            return username != null;
+        }
+
         void enqueue(ByteBuffer data) {
             synchronized (writeQueue) {
                 writeQueue.add(data);
