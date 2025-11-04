@@ -438,18 +438,6 @@ public class NioChatServer implements Runnable {
         } catch (IOException ignored) {
         }
     }
-
-    private static String str(Object o) {
-        return o == null ? null : String.valueOf(o);
-    }
-
-    private static Integer intOrNull(Object o) {
-        try {
-            return o == null ? null : Integer.parseInt(String.valueOf(o));
-        } catch (Exception e) {
-            return null;
-        }
-    }
     private static Integer intOrNull(String value) {
         try {
             return value == null || value.isBlank() ? null : Integer.parseInt(value.trim());
