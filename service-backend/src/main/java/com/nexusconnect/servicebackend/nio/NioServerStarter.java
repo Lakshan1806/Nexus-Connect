@@ -1,26 +1,23 @@
 package com.nexusconnect.servicebackend.nio;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 
-@Component
+import java.io.IOException;
+
+@Configuration
 public class NioServerStarter {
-    @Value("${nexus.nio.port:8081}")
-    private int nioPort;
-    private NioChatServer server;
+    private final int nioPort;
 
-    @PostConstruct
-    public void start() throws Exception {
-        server = new NioChatServer(nioPort);
+    public NioServerStarter(@Value("${nexus.nio.port:8081}") int nioPort) {
+        this.nioPort = nioPort;
+    }
+
+    @Bean(destroyMethod = "stop")
+    public NioChatServer nioChatServer() throws IOException {
+        NioChatServer server = new NioChatServer(nioPort);
         server.start();
+        return server;
     }
-
-    @PreDestroy
-    public void stop() {
-        if (server != null) server.stop();
-    }
-
 }
-
