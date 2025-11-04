@@ -663,4 +663,4 @@ function PeerRow({ label, value }) {
   )
 }
 
-export default App
+export default App;
