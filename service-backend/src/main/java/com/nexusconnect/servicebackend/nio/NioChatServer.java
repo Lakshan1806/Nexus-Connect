@@ -1,7 +1,7 @@
 package com.nexusconnect.servicebackend.nio;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger; import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -17,22 +17,23 @@ import java.util.stream.Collectors;
 public class NioChatServer implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(NioChatServer.class);
     private static final int READ_BUF = 64 * 1024;
+    private static final int HISTORY_LIMIT = 200;
 
     private final int port;
-    private final ObjectMapper json = new ObjectMapper();
     private final ExecutorService workers =
-            Executors.newFixedThreadPool(Math.max(2, Runtime.getRuntime().availableProcessors()-1));
+            Executors.newFixedThreadPool(Math.max(2, Runtime.getRuntime().availableProcessors() - 1));
 
-  
-    private final Map<String,String> auth = Map.of(
-            "lakshan","123", "kevin","123", "alice","a1", "bob","b1"
+
+    private final Map<String, String> auth = Map.of(
+            "lakshan", "123", "kevin", "123", "alice", "a1", "bob", "b1"
     );
 
- 
-    private final ConcurrentHashMap<String, Session> online = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<SocketChannel, Session> sessions = new ConcurrentHashMap<>();
 
-   
+    private final ConcurrentHashMap<String, Presence> online = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<SocketChannel, Session> sessions = new ConcurrentHashMap<>();
+    private final Deque<ChatMessage> history = new ConcurrentLinkedDeque<>();
+
+
     private volatile boolean running = false;
     private Selector selector;
     private ServerSocketChannel server;
@@ -120,7 +121,8 @@ public class NioChatServer implements Runnable {
             s.lineBuffer.delete(0, idx + 1);
             if (!line.isEmpty()) {
                 String srcIp = ((InetSocketAddress) ch.getRemoteAddress()).getAddress().getHostAddress();
-                workers.submit(() -> handleLine(s, line, srcIp));
+                String finalLine = line;
+                workers.submit(() -> handleLine(s, finalLine, srcIp));
             }
         }
     }
@@ -141,102 +143,262 @@ public class NioChatServer implements Runnable {
     }
 
     private void handleLine(Session s, String line, String srcIp) {
+        String[] parts = line.split(":", 5);
+        String command = parts[0].trim().toUpperCase(Locale.ROOT);
         try {
-            Map<?,?> obj = json.readValue(line, Map.class);
-            String type = str(obj.get("type"));
-            switch (type) {
-                case "LOGIN"     -> handleLogin(s, obj, srcIp);
-                case "MSG"       -> handleGlobalMsg(s, obj);
-                case "ASK_PEER"  -> handleAskPeer(s, obj);
-                case "ASK_USERS" -> sendUsersList(s);
-                default -> sendJson(s, Map.of("type","ERROR","msg","unknown type: "+type));
+            switch (command) {
+                case "LOGIN" -> handleLogin(s, parts, srcIp);
+                case "MSG" -> handleGlobalMsg(s, line);
+                case "PEER" -> handleAskPeer(s, parts);
+                case "USERS" -> sendUsersList(s);
+                default -> sendFrame(s, "ERROR:unknown command");
             }
         } catch (Exception e) {
-            sendJson(s, Map.of("type","ERROR","msg","bad json"));
+            log.warn("Failed to process frame '{}': {}", line, e.getMessage());
+            sendFrame(s, "ERROR:bad frame");
         }
     }
 
-    private void handleLogin(Session s, Map<?,?> obj, String srcIp) {
-        String user = str(obj.get("user"));
-        String pass = str(obj.get("pass"));
-        Integer fileTcp = intOrNull(obj.get("fileTcp"));
-        Integer voiceUdp= intOrNull(obj.get("voiceUdp"));
+    private void handleLogin(Session s, String[] parts, String srcIp) {
+        if (parts.length < 3) {
+            sendFrame(s, "LOGIN_FAIL:missing credentials");
+            return;
+        }
+        String user = parts[1].trim();
+        String pass = parts[2].trim();
+        Integer fileTcp = parts.length >= 4 ? intOrNull(parts[3]) : null;
+        Integer voiceUdp = parts.length >= 5 ? intOrNull(parts[4]) : null;
 
-        if (user == null || pass == null) { sendJson(s, Map.of("type","LOGIN_FAIL","reason","missing")); return; }
-        if (!pass.equals(auth.get(user))) { sendJson(s, Map.of("type","LOGIN_FAIL","reason","bad creds")); return; }
+        if (user.isEmpty() || pass.isEmpty()) {
+            sendFrame(s, "LOGIN_FAIL:missing credentials");
+            return;
+        }
+        if (!pass.equals(auth.get(user))) {
+            sendFrame(s, "LOGIN_FAIL:bad credentials");
+            return;
+        }
 
-        Session prev = online.put(user, s);
-        if (prev != null && prev != s) disconnect(prev, "relogin");
+        Presence prev = online.put(user, s);
+        if (prev instanceof Session prevSession && prevSession != s) {
+            disconnect(prevSession, "relogin");
+        }
 
-        s.username = user; s.ip = srcIp;
+        s.username = user;
+        s.ip = srcIp;
         s.fileTcp = fileTcp != null ? fileTcp : -1;
-        s.voiceUdp= voiceUdp!= null ? voiceUdp: -1;
+        s.voiceUdp = voiceUdp != null ? voiceUdp : -1;
 
-        sendJson(s, Map.of("type","LOGIN_OK", "you", user, "users", usersSnapshot()));
-        broadcastExcept(s, Map.of("type","USER_JOINED","user",user));
+        sendFrame(s, "LOGIN_SUCCESS:" + user);
+        sendUsersList(s);
+        broadcastUserEvent(user, true, "USER_JOINED", s);
+        broadcastUserList(s);
         log.info("LOGIN {} from {} (fileTcp={}, voiceUdp={})", user, srcIp, s.fileTcp, s.voiceUdp);
     }
 
-    private void handleGlobalMsg(Session s, Map<?,?> obj) {
-        if (!s.isAuthed()) { sendJson(s, Map.of("type","ERROR","msg","login first")); return; }
-        String text = str(obj.get("text"));
-        if (text == null || text.isBlank()) return;
-        Map<String,Object> frame = new LinkedHashMap<>();
-        frame.put("type","MSG"); frame.put("from", s.username);
-        frame.put("text", text); frame.put("ts", System.currentTimeMillis()/1000);
-        broadcast(frame);
+    private void handleGlobalMsg(Session s, String frame) {
+        if (!s.isAuthed()) {
+            sendFrame(s, "ERROR:login first");
+            return;
+        }
+        String text = frame.indexOf(':') >= 0 ? frame.substring(frame.indexOf(':') + 1) : "";
+        text = text.trim();
+        if (text.isEmpty()) {
+            return;
+        }
+        ChatMessage msg = new ChatMessage(s.username, text, System.currentTimeMillis() / 1000);
+        recordMessage(msg);
+        broadcastChat(msg);
     }
 
-    private void handleAskPeer(Session s, Map<?,?> obj) {
-        if (!s.isAuthed()) { sendJson(s, Map.of("type","ERROR","msg","login first")); return; }
-        String target = str(obj.get("user"));
-        Session t = online.get(target);
-        if (t == null) { sendJson(s, Map.of("type","PEER","user",target,"error","offline")); return; }
-        sendJson(s, Map.of("type","PEER","user",target,"ip",t.ip,"fileTcp",t.fileTcp,"voiceUdp",t.voiceUdp));
+    private void handleAskPeer(Session s, String[] parts) {
+        if (!s.isAuthed()) {
+            sendFrame(s, "ERROR:login first");
+            return;
+        }
+        if (parts.length < 2) {
+            sendFrame(s, "ERROR:missing target");
+            return;
+        }
+        String target = parts[1].trim();
+        Presence t = online.get(target);
+        if (t == null) {
+            sendFrame(s, "PEER:" + target + ":offline");
+            return;
+        }
+        sendFrame(s, String.join(":",
+                "PEER",
+                target,
+                t.ip(),
+                String.valueOf(t.fileTcp()),
+                String.valueOf(t.voiceUdp()),
+                t.viaNio() ? "nio" : "http"
+        ));
     }
 
-    private void sendUsersList(Session s) { sendJson(s, Map.of("type","USERS","list", usersSnapshot())); }
+    private void sendUsersList(Session s) {
+        sendFrame(s, "USER_LIST:" + encodeUserList());
+    }
+
+    private void broadcastUserList() {
+        broadcastUserList(null);
+    }
+
+    private void broadcastUserList(Session exclude) {
+        broadcastExcept(exclude, "USER_LIST:" + encodeUserList());
+    }
+
+    private String encodeUserList() {
+        return online.values().stream()
+                .sorted(Comparator.comparing(Presence::username))
+                .map(this::encodePresence)
+                .collect(Collectors.joining(";"));
+    }
+
+    private String encodePresence(Presence presence) {
+        return String.join(",",
+                presence.username(),
+                presence.ip(),
+                String.valueOf(presence.fileTcp()),
+                String.valueOf(presence.voiceUdp()),
+                presence.viaNio() ? "nio" : "http"
+        );
+    }
 
     public List<Map<String,Object>> usersSnapshot() {
-        return online.values().stream().map(sess -> {
+        return online.values().stream().map(p -> {
             Map<String,Object> m = new LinkedHashMap<>();
-            m.put("user", sess.username); m.put("ip", sess.ip);
-            m.put("fileTcp", sess.fileTcp); m.put("voiceUdp", sess.voiceUdp);
+            m.put("user", p.username());
+            m.put("ip", p.ip());
+            m.put("fileTcp", p.fileTcp());
+            m.put("voiceUdp", p.voiceUdp());
+            m.put("viaNio", p.viaNio());
             return m;
-        }).collect(Collectors.toList());
+        }).toList();
     }
-    public Optional<Peer> findPeer(String user) {
-        Session t = online.get(user);
-        if (t == null) return Optional.empty();
-        return Optional.of(new Peer(t.ip, t.fileTcp, t.voiceUdp));
-    }
-    public record Peer(String ip, int fileTcp, int voiceUdp) {}
 
-    private void sendJson(Session s, Map<String,?> map) {
-        try {
-            byte[] bytes = (json.writeValueAsString(map) + "\n").getBytes(StandardCharsets.UTF_8);
-            s.enqueue(ByteBuffer.wrap(bytes));
-        } catch (Exception e) { log.warn("sendJson failed", e); }
+    public List<UserPresence> onlineUsers() {
+        return online.values().stream()
+                .map(p -> new UserPresence(p.username(), p.ip(), p.fileTcp(), p.voiceUdp(), p.viaNio()))
+                .toList();
     }
-    private void broadcast(Map<String,?> map) {
-        byte[] bytes;
-        try { bytes = (json.writeValueAsString(map) + "\n").getBytes(StandardCharsets.UTF_8); }
-        catch (Exception e) { return; }
-        ByteBuffer buf = ByteBuffer.wrap(bytes);
-        for (Session s: sessions.values()) s.enqueue(buf.duplicate());
+
+    public List<ChatMessage> recentMessages() {
+        synchronized (history) {
+            return new ArrayList<>(history);
+        }
     }
-    private void broadcastExcept(Session except, Map<String,?> map) {
-        byte[] bytes;
-        try { bytes = (json.writeValueAsString(map) + "\n").getBytes(StandardCharsets.UTF_8); }
-        catch (Exception e) { return; }
-        ByteBuffer buf = ByteBuffer.wrap(bytes);
-        for (Session s: sessions.values()) if (s != except) s.enqueue(buf.duplicate());
+
+    public Optional<Peer> findPeer(String user) {
+        Presence t = online.get(user);
+        if (t == null) return Optional.empty();
+        return Optional.of(new Peer(t.ip(), t.fileTcp(), t.voiceUdp(), t.viaNio()));
+    }
+
+    public LoginResult loginHttp(String user, String pass, String ip, Integer fileTcp, Integer voiceUdp) {
+        if (user == null || pass == null) {
+            return new LoginResult(false, "missing", List.of(), recentMessages());
+        }
+        if (!verifyCredentials(user, pass)) {
+            return new LoginResult(false, "bad creds", List.of(), recentMessages());
+        }
+        int file = fileTcp != null ? fileTcp : -1;
+        int voice = voiceUdp != null ? voiceUdp : -1;
+        HttpPresence presence = new HttpPresence(user, ip, file, voice);
+        Presence previous = online.put(user, presence);
+        if (previous instanceof Session session) {
+            disconnect(session, "relogin via http");
+        }
+        broadcastUserEvent(user, false, "USER_JOINED", null);
+        broadcastUserList();
+        log.info("HTTP LOGIN {} from {} (fileTcp={}, voiceUdp={})", user, ip, file, voice);
+        return new LoginResult(true, null, onlineUsers(), recentMessages());
+    }
+
+    public boolean logoutHttp(String user) {
+        if (user == null) return false;
+        Presence current = online.get(user);
+        if (current instanceof HttpPresence httpPresence && online.remove(user, httpPresence)) {
+            broadcastUserEvent(user, false, "USER_LEFT", null);
+            broadcastUserList();
+            log.info("HTTP LOGOUT {}", user);
+            return true;
+        }
+        return false;
+    }
+
+    public Optional<ChatMessage> broadcastFrom(String user, String text) {
+        if (user == null || text == null) return Optional.empty();
+        String sanitized = text.strip();
+        if (sanitized.isEmpty()) return Optional.empty();
+        Presence presence = online.get(user);
+        if (presence == null) return Optional.empty();
+        ChatMessage msg = new ChatMessage(user, sanitized, System.currentTimeMillis() / 1000);
+        recordMessage(msg);
+        broadcastChat(msg);
+        return Optional.of(msg);
+    }
+
+    public boolean verifyCredentials(String user, String pass) {
+        if (user == null || pass == null) return false;
+        return pass.equals(auth.get(user));
+    }
+
+    public record Peer(String ip, int fileTcp, int voiceUdp, boolean viaNio) {}
+    public record UserPresence(String user, String ip, int fileTcp, int voiceUdp, boolean viaNio) {}
+    public record ChatMessage(String from, String text, long timestampSeconds) {}
+    public record LoginResult(boolean success, String reason, List<UserPresence> users, List<ChatMessage> messages) {}
+
+    private void recordMessage(ChatMessage msg) {
+        synchronized (history) {
+            history.addLast(msg);
+            while (history.size() > HISTORY_LIMIT) {
+                history.pollFirst();
+            }
+        }
+    }
+
+    private void broadcastChat(ChatMessage msg) {
+        broadcast(String.join(":",
+                "CHAT_MSG",
+                msg.from(),
+                String.valueOf(msg.timestampSeconds()),
+                msg.text().replace('\n', ' ')
+        ));
+    }
+
+    private void sendFrame(Session s, String frame) {
+        s.enqueue(StandardCharsets.UTF_8.encode(frame + "\n"));
+    }
+
+    private void broadcast(String frame) {
+        ByteBuffer buf = StandardCharsets.UTF_8.encode(frame + "\n");
+        for (Session session : sessions.values()) {
+            session.enqueue(buf.duplicate());
+        }
+    }
+
+    private void broadcastExcept(Session except, String frame) {
+        ByteBuffer buf = StandardCharsets.UTF_8.encode(frame + "\n");
+        for (Session session : sessions.values()) {
+            if (session != except) {
+                session.enqueue(buf.duplicate());
+            }
+        }
+    }
+
+    private void broadcastUserEvent(String user, boolean viaNio, String type, Session exclude) {
+        broadcastExcept(exclude, String.join(":",
+                type,
+                user,
+                viaNio ? "nio" : "http"
+        ));
     }
 
     private void disconnect(Session s, String reason) {
         try {
             if (s.username != null && online.remove(s.username, s)) {
-                broadcastExcept(s, Map.of("type","USER_LEFT","user",s.username));
+                broadcastUserEvent(s.username, true, "USER_LEFT", s);
+                broadcastUserList(s);
             }
             sessions.remove(s.ch);
             s.key.cancel();
@@ -251,10 +413,23 @@ public class NioChatServer implements Runnable {
             else { key.channel().close(); key.cancel(); }
         } catch (IOException ignored) {}
     }
-    private static String str(Object o){ return o==null?null:String.valueOf(o); }
-    private static Integer intOrNull(Object o){ try{ return o==null?null:Integer.parseInt(String.valueOf(o)); }catch(Exception e){return null;} }
+    private static Integer intOrNull(String value) {
+        try {
+            return value == null || value.isBlank() ? null : Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
 
-    private static class Session {
+    private interface Presence {
+        String username();
+        String ip();
+        int fileTcp();
+        int voiceUdp();
+        boolean viaNio();
+    }
+
+    private static class Session implements Presence {
         final SocketChannel ch; final SelectionKey key;
         final ByteBuffer readBuf = ByteBuffer.allocateDirect(READ_BUF);
         final StringBuilder lineBuffer = new StringBuilder(2048);
@@ -264,9 +439,40 @@ public class NioChatServer implements Runnable {
         Session(SocketChannel ch, SelectionKey key){ this.ch = ch; this.key = key; }
         boolean isAuthed(){ return username != null; }
         void enqueue(ByteBuffer data) {
-            synchronized (writeQueue) { writeQueue.add(data); }
+            synchronized (writeQueue) {
+                writeQueue.add(data);
+            }
+            Selector selector = key.selector();
+            if (selector != null) {
+                selector.wakeup();
+            }
             key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
-            key.selector().wakeup();
         }
+
+        @Override public String username() { return username; }
+        @Override public String ip() { return ip; }
+        @Override public int fileTcp() { return fileTcp; }
+        @Override public int voiceUdp() { return voiceUdp; }
+        @Override public boolean viaNio() { return true; }
+    }
+
+    private static class HttpPresence implements Presence {
+        private final String username;
+        private final String ip;
+        private final int fileTcp;
+        private final int voiceUdp;
+
+        HttpPresence(String username, String ip, int fileTcp, int voiceUdp) {
+            this.username = username;
+            this.ip = ip;
+            this.fileTcp = fileTcp;
+            this.voiceUdp = voiceUdp;
+        }
+
+        @Override public String username() { return username; }
+        @Override public String ip() { return ip; }
+        @Override public int fileTcp() { return fileTcp; }
+        @Override public int voiceUdp() { return voiceUdp; }
+        @Override public boolean viaNio() { return false; }
     }
 }
