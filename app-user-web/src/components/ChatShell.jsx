@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import PeerCard from "./PeerCard.jsx";
+import VoicePanel from "./VoicePanel.jsx";
 
 function ChatShell({
   activeUser,
@@ -138,6 +139,21 @@ function ChatShell({
                 peerLoading={peerLoading}
                 selectedUser={selectedUser}
                 session={session}
+              />
+            )}
+            {selectedUser && (
+              <VoicePanel
+                apiBase={apiBase}
+                currentUser={session}
+                selectedUser={selectedUser}
+                peerDetails={peerDetails}
+                localVoicePort={activeUser?.voiceUdp}
+                onVoiceSessionStart={(sessionId) => {
+                  console.log("Voice session started:", sessionId);
+                }}
+                onVoiceSessionEnd={() => {
+                  console.log("Voice session ended");
+                }}
               />
             )}
           </aside>
