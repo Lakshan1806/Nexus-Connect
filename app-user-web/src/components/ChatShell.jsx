@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useState, useMemo } from "react";
 import PeerCard from "./PeerCard.jsx";
+import LANDiscovery from "./LANDiscovery.jsx";
 
 function ChatShell({
   activeUser,
@@ -35,12 +36,15 @@ function ChatShell({
   const peer =
     selectedUser?.user === session.user ? null : (peerDetails ?? selectedUser);
 
+   // State for LAN discovery modal
+  const [discoveryOpen, setDiscoveryOpen] = useState(false);
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-slate-950">
       <div
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(51,105,230,0.25),transparent_65%)]"
         aria-hidden="true"
-      />
+    />
       <div className="relative z-10 mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-10 lg:px-8">
         <header className="shadow-glass flex flex-col gap-4 rounded-3xl border border-white/5 bg-slate-900/60 p-6 backdrop-blur-sm lg:flex-row lg:items-center lg:justify-between">
           <div>
@@ -80,6 +84,29 @@ function ChatShell({
                     </span>
                   )
                 )}
+
+                 {/* Find LAN Peers Button */}
+                <button
+                  type="button"
+                  onClick={() => setDiscoveryOpen(true)}
+                  className="hover:border-brand-400 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-300 transition hover:text-white"
+                >
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
+                    />
+                  </svg>
+                  <span>Find LAN Peers</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={onLogout}
@@ -245,6 +272,12 @@ function ChatShell({
             </form>
           </section>
         </main>
+        {/* LAN Discovery Modal */}
+        <LANDiscovery
+          username={session.user}
+          isOpen={discoveryOpen}
+          onClose={() => setDiscoveryOpen(false)}
+        />
       </div>
     </div>
   );

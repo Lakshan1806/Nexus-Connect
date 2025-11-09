@@ -82,4 +82,21 @@ export async function fetchPeerDetails(user) {
   }
 }
 
+// Add these functions to your existing app-user-web/src/api.js file
+
+export async function broadcastDiscovery(username, additionalInfo = '') {
+  return request('/api/discovery/broadcast', {
+    method: 'POST',
+    json: { username, additionalInfo }
+  })
+}
+
+export async function fetchDiscoveredPeers() {
+  return request('/api/discovery/peers')
+}
+
+export async function fetchDiscoveredPeer(username) {
+  return request(`/api/discovery/peers/${encodeURIComponent(username)}`)
+}
+
 export { API_BASE }
