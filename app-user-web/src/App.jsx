@@ -9,6 +9,7 @@ import {
 } from "./api.js";
 import LoginScreen from "./components/LoginScreen.jsx";
 import ChatShell from "./components/ChatShell.jsx";
+import { useVoiceChat } from "./hooks/useVoiceChat.js";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -51,6 +52,9 @@ function App() {
   const [sendingMessage, setSendingMessage] = useState(false);
   const [syncError, setSyncError] = useState("");
   const [lastRefreshed, setLastRefreshed] = useState(null);
+
+  // Voice chat functionality
+  const voiceChat = useVoiceChat(API_BASE);
 
   const sessionRef = useRef(session);
   useEffect(() => {
@@ -170,6 +174,17 @@ function App() {
     };
   }, [session, selectedUser]);
 
+  // Poll for incoming voice calls every 2 seconds
+  useEffect(() => {
+    if (!session) return;
+
+    const pollInterval = setInterval(() => {
+      voiceChat.checkIncomingCalls(session.user);
+    }, 2000);
+
+    return () => clearInterval(pollInterval);
+  }, [session, voiceChat]);
+
   const handleInputChange = useCallback(
     (field) => (event) => {
       const value = event.target.value;
@@ -210,6 +225,18 @@ function App() {
         setSyncError("");
         setLastRefreshed(Date.now());
         setCredentials((previous) => ({ ...previous, pass: "" }));
+
+        // Request microphone permission for voice chat
+        try {
+          await navigator.mediaDevices.getUserMedia({ audio: true });
+          console.log("[App] Microphone permission granted");
+        } catch (micErr) {
+          console.warn(
+            "[App] Microphone permission denied or unavailable:",
+            micErr,
+          );
+          // Don't fail login, just warn
+        }
       } catch (error) {
         console.error("login failed", error);
         setLoginError(error.message || "Unable to login. Please try again.");
@@ -311,6 +338,11 @@ function App() {
       syncError={syncError}
       timeFormatter={timeFormatter}
       users={sortedUsers}
+      incomingCalls={voiceChat.incomingCalls}
+      currentUserPort={activeUser?.voiceUdp}
+      onAcceptCall={voiceChat.acceptIncomingCall}
+      onRejectCall={voiceChat.rejectIncomingCall}
+      voiceChat={voiceChat}
     />
   );
 }

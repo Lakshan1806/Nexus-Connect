@@ -1,5 +1,13 @@
 server:
-  port: 8080        # Boot stays on 8080
+  port: 8080 # Boot stays on 8080
+  shutdown: graceful
+  tomcat:
+    connection-timeout: 20000
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
 nexus:
   nio:
     port: 8081

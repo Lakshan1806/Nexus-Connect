@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import PeerCard from "./PeerCard.jsx";
 import VoicePanel from "./VoicePanel.jsx";
+import IncomingCallModal from "./IncomingCallModal.jsx";
 
 function ChatShell({
   activeUser,
@@ -22,6 +23,11 @@ function ChatShell({
   syncError,
   timeFormatter,
   users,
+  incomingCalls,
+  currentUserPort,
+  onAcceptCall,
+  onRejectCall,
+  voiceChat,
 }) {
   const refreshedAt = useMemo(() => {
     if (!lastRefreshed) return null;
@@ -38,6 +44,15 @@ function ChatShell({
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-slate-950">
+      {/* Incoming Call Modal */}
+      <IncomingCallModal
+        incomingCalls={incomingCalls}
+        currentUser={session?.user}
+        localVoicePort={currentUserPort}
+        onAccept={onAcceptCall}
+        onReject={onRejectCall}
+      />
+
       <div
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(51,105,230,0.25),transparent_65%)]"
         aria-hidden="true"
@@ -148,6 +163,7 @@ function ChatShell({
                 selectedUser={selectedUser}
                 peerDetails={peerDetails}
                 localVoicePort={activeUser?.voiceUdp}
+                voiceChat={voiceChat}
                 onVoiceSessionStart={(sessionId) => {
                   console.log("Voice session started:", sessionId);
                 }}

@@ -104,6 +104,75 @@ public class VoiceSessionManager {
     }
 
     /**
+     * Gets all incoming calls for a specific user (where they are the target).
+     */
+    public List<VoiceSession> getIncomingCalls(String user) {
+        return activeSessions.values().stream()
+                .filter(s -> s.target().equals(user))
+                .filter(s -> "RINGING".equals(s.state()))
+                .toList();
+    }
+
+    /**
+     * Accepts an incoming call by updating session state and setting target port.
+     */
+    public synchronized VoiceSession acceptSession(long sessionId, String accepter, int localPort) {
+        VoiceSession session = activeSessions.get(sessionId);
+
+        if (session == null) {
+            log.warn("Cannot accept: Session {} not found", sessionId);
+            return null;
+        }
+
+        if (!session.target().equals(accepter)) {
+            log.warn("Cannot accept: User {} is not the target of session {}", accepter, sessionId);
+            return null;
+        }
+
+        if (!"RINGING".equals(session.state())) {
+            log.warn("Cannot accept: Session {} is in state {}, not RINGING", sessionId, session.state());
+            return null;
+        }
+
+        session.setState("CONNECTED");
+        session.updateTargetPort(localPort);
+        log.info("Voice session {} accepted by {}. Target now has port {}", sessionId, accepter, localPort);
+        return session;
+    }
+
+    /**
+     * Rejects an incoming call.
+     */
+    public synchronized boolean rejectSession(long sessionId, String rejector) {
+        VoiceSession session = activeSessions.get(sessionId);
+
+        if (session == null) {
+            log.warn("Cannot reject: Session {} not found", sessionId);
+            return false;
+        }
+
+        if (!session.target().equals(rejector)) {
+            log.warn("Cannot reject: User {} is not the target of session {}", rejector, sessionId);
+            return false;
+        }
+
+        session.setState("REJECTED");
+        log.info("Voice session {} rejected by {}", sessionId, rejector);
+        // Optionally remove immediately, or let it expire
+        activeSessions.remove(sessionId);
+        return true;
+    }
+
+    /**
+     * Shuts down the voice session manager.
+     */
+    public void shutdown() {
+        sessionCleanupExecutor.shutdownNow();
+        activeSessions.clear();
+        log.info("Voice session manager shut down");
+    }
+
+    /**
      * Cleans up expired sessions (inactive for too long).
      */
     private void cleanupExpiredSessions() {
@@ -119,27 +188,28 @@ public class VoiceSessionManager {
     }
 
     /**
-     * Shuts down the voice session manager.
-     */
-    public void shutdown() {
-        sessionCleanupExecutor.shutdownNow();
-        activeSessions.clear();
-        log.info("Voice session manager shut down");
-    }
-
-    /**
      * Represents an active voice session between two peers.
+     * States: RINGING (waiting for acceptance) -> CONNECTED (both peers connected)
+     * -> ENDED
      */
     public static class VoiceSession {
         private final long sessionId;
         private final String initiator;
         private final String target;
+        private volatile String state; // RINGING, CONNECTED, REJECTED, ENDED
         private final String initiatorIp;
         private final int initiatorPort;
-        private final String targetIp;
-        private final int targetPort;
+        private volatile String targetIp;
+        private volatile int targetPort;
         private final long createdAt;
+        private volatile long acceptedAt;
         private volatile long lastActivityTime;
+
+        // WebRTC SDP (Session Description Protocol) for offer/answer exchange
+        private volatile String initiatorSdpOffer; // Offer created by initiator
+        private volatile String targetSdpAnswer; // Answer created by target
+        private volatile boolean initiatorOfferReady = false;
+        private volatile boolean targetAnswerReady = false;
 
         public VoiceSession(long sessionId, String initiator, String target,
                 String initiatorIp, int initiatorPort,
@@ -147,11 +217,13 @@ public class VoiceSessionManager {
             this.sessionId = sessionId;
             this.initiator = initiator;
             this.target = target;
+            this.state = "RINGING"; // Start in RINGING state
             this.initiatorIp = initiatorIp;
             this.initiatorPort = initiatorPort;
             this.targetIp = targetIp;
             this.targetPort = targetPort;
             this.createdAt = createdAt;
+            this.acceptedAt = 0;
             this.lastActivityTime = createdAt;
         }
 
@@ -187,6 +259,25 @@ public class VoiceSessionManager {
             return createdAt;
         }
 
+        public String state() {
+            return state;
+        }
+
+        public long acceptedAt() {
+            return acceptedAt;
+        }
+
+        public void setState(String newState) {
+            this.state = newState;
+            if ("CONNECTED".equals(newState)) {
+                this.acceptedAt = System.currentTimeMillis();
+            }
+        }
+
+        public void updateTargetPort(int newPort) {
+            this.targetPort = newPort;
+        }
+
         public long lastActivityTime() {
             return lastActivityTime;
         }
@@ -197,6 +288,33 @@ public class VoiceSessionManager {
 
         public long getDurationMs() {
             return System.currentTimeMillis() - createdAt;
+        }
+
+        // WebRTC SDP accessors
+        public void setInitiatorSdpOffer(String sdpOffer) {
+            this.initiatorSdpOffer = sdpOffer;
+            this.initiatorOfferReady = true;
+        }
+
+        public String getInitiatorSdpOffer() {
+            return initiatorSdpOffer;
+        }
+
+        public boolean isInitiatorOfferReady() {
+            return initiatorOfferReady;
+        }
+
+        public void setTargetSdpAnswer(String sdpAnswer) {
+            this.targetSdpAnswer = sdpAnswer;
+            this.targetAnswerReady = true;
+        }
+
+        public String getTargetSdpAnswer() {
+            return targetSdpAnswer;
+        }
+
+        public boolean isTargetAnswerReady() {
+            return targetAnswerReady;
         }
     }
 }

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useVoiceChat } from "../hooks/useVoiceChat.js";
 
 /**
  * VoicePanel UI Component for P2P WebRTC voice chat.
@@ -20,12 +19,13 @@ function VoicePanel({
   selectedUser,
   peerDetails,
   localVoicePort,
+  voiceChat,
   onVoiceSessionStart,
   onVoiceSessionEnd,
 }) {
-  const voiceChat = useVoiceChat(apiBase);
   const [callDuration, setCallDuration] = useState(0);
   const callTimerRef = useRef(null);
+  // Create local ref for the audio element
   const remoteAudioRef = useRef(null);
 
   // Prevent calling yourself
@@ -50,13 +50,41 @@ function VoicePanel({
     };
   }, [voiceChat.isConnected]);
 
-  // Attach remote audio ref to hook's remote audio reference
+  // ✅ NEW: Register the audio element with the hook (run once on mount)
   useEffect(() => {
-    const remoteAudioRefFromHook = voiceChat.getRemoteAudioRef();
-    if (remoteAudioRefFromHook && remoteAudioRef.current) {
-      remoteAudioRefFromHook.current = remoteAudioRef.current;
+    if (remoteAudioRef.current && voiceChat.setRemoteAudioElement) {
+      console.log("[VoicePanel] Registering audio element with voiceChat hook");
+      voiceChat.setRemoteAudioElement(remoteAudioRef.current);
     }
-  }, [voiceChat]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency - run once on mount only
+
+  // ✅ Debug: Monitor audio element state when connected
+  useEffect(() => {
+    if (voiceChat.isConnected && remoteAudioRef.current) {
+      const debugInterval = setInterval(() => {
+        const audio = remoteAudioRef.current;
+        if (audio) {
+          console.log("[VoicePanel] Audio element state:", {
+            hasStream: !!audio.srcObject,
+            paused: audio.paused,
+            muted: audio.muted,
+            volume: audio.volume,
+            currentTime: audio.currentTime,
+            duration: audio.duration,
+            readyState: audio.readyState,
+            networkState: audio.networkState,
+            buffered:
+              audio.buffered.length > 0
+                ? `${audio.buffered.length} ranges`
+                : "none",
+          });
+        }
+      }, 3000); // Every 3 seconds
+
+      return () => clearInterval(debugInterval);
+    }
+  }, [voiceChat.isConnected]);
 
   const handleStartCall = async () => {
     if (!canCall || !localVoicePort) {
@@ -80,6 +108,30 @@ function VoicePanel({
     await voiceChat.endVoiceCall();
     setCallDuration(0);
     onVoiceSessionEnd?.();
+  };
+
+  const handlePlayAudio = () => {
+    if (remoteAudioRef.current) {
+      console.log("[VoicePanel] Manual audio play triggered");
+      remoteAudioRef.current
+        .play()
+        .then(() => {
+          console.log("[VoicePanel] Manual audio playback started");
+        })
+        .catch((err) => {
+          console.error("[VoicePanel] Manual audio playback failed:", err);
+        });
+    }
+  };
+
+  const handleVolumeChange = (e) => {
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.volume = e.target.value;
+      console.log(
+        "[VoicePanel] Volume changed to:",
+        remoteAudioRef.current.volume,
+      );
+    }
   };
 
   const formatDuration = (seconds) => {
@@ -125,9 +177,20 @@ function VoicePanel({
       {/* Remote Audio Element (hidden, for playback) */}
       <audio
         ref={remoteAudioRef}
-        autoPlay
+        autoPlay={true}
         playsInline
+        muted={false}
+        controls={false}
         style={{ display: "none" }}
+        onError={(e) => console.error("[VoicePanel] Audio playback error:", e)}
+        onLoadedMetadata={() =>
+          console.log("[VoicePanel] Remote audio metadata loaded")
+        }
+        onPlaying={() => console.log("[VoicePanel] ✅ Audio IS PLAYING NOW")}
+        onPlay={() => console.log("[VoicePanel] Play event fired")}
+        onLoadedData={() =>
+          console.log("[VoicePanel] Audio data loaded, ready to play")
+        }
       />
 
       <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-4 text-sm text-slate-300">
@@ -187,19 +250,95 @@ function VoicePanel({
 
           {/* Microphone Controls - When Connected */}
           {voiceChat.isConnected && (
-            <div className="flex items-center gap-2 rounded bg-slate-800/30 p-2">
+            <>
+              <div className="flex items-center gap-2 rounded bg-slate-800/30 p-2">
+                <button
+                  onClick={voiceChat.toggleMicrophone}
+                  className={`flex flex-1 items-center justify-center gap-2 rounded px-3 py-2 text-xs font-semibold transition-all ${
+                    voiceChat.microphoneActive
+                      ? "bg-red-600 text-white hover:bg-red-500"
+                      : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                  }`}
+                >
+                  {voiceChat.microphoneActive ? "🎤" : "🔇"}
+                  {voiceChat.microphoneActive ? "Mic On" : "Mic Muted"}
+                </button>
+              </div>
+
+              {/* Volume Control */}
+              <div className="rounded bg-slate-800/30 p-3">
+                <label className="mb-2 block text-xs font-semibold text-slate-400">
+                  🔊 Volume
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  defaultValue="1"
+                  onChange={handleVolumeChange}
+                  className="h-2 w-full cursor-pointer rounded-lg bg-slate-700 accent-green-500"
+                />
+              </div>
+
+              {/* Audio Playback Control */}
               <button
-                onClick={voiceChat.toggleMicrophone}
-                className={`flex flex-1 items-center justify-center gap-2 rounded px-3 py-2 text-xs font-semibold transition-all ${
-                  voiceChat.microphoneActive
-                    ? "bg-red-600 text-white hover:bg-red-500"
-                    : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                }`}
+                onClick={handlePlayAudio}
+                className="w-full rounded bg-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 transition-all hover:bg-slate-600"
               >
-                {voiceChat.microphoneActive ? "🎤" : "🔇"}
-                {voiceChat.microphoneActive ? "Mic On" : "Mic Muted"}
+                🔊 Unmute Audio (if needed)
               </button>
-            </div>
+
+              {/* Debug Audio Button */}
+              <button
+                onClick={() => {
+                  const audio = remoteAudioRef.current;
+                  console.log("=== 🔍 AUDIO DEBUG REPORT ===");
+                  console.log("Audio element exists:", !!audio);
+                  if (audio) {
+                    console.log("Has srcObject:", !!audio.srcObject);
+                    if (audio.srcObject) {
+                      console.log("Stream ID:", audio.srcObject.id);
+                      console.log("Stream active:", audio.srcObject.active);
+                      console.log(
+                        "Audio tracks:",
+                        audio.srcObject.getAudioTracks().length,
+                      );
+                      audio.srcObject.getAudioTracks().forEach((track, i) => {
+                        console.log(`  Track ${i}:`, {
+                          id: track.id,
+                          label: track.label,
+                          enabled: track.enabled,
+                          muted: track.muted,
+                          readyState: track.readyState,
+                        });
+                      });
+                    }
+                    console.log("Audio paused:", audio.paused);
+                    console.log("Audio muted:", audio.muted);
+                    console.log("Audio volume:", audio.volume);
+                    console.log("Audio currentTime:", audio.currentTime);
+                    console.log("Audio duration:", audio.duration);
+                    console.log("Audio readyState:", audio.readyState);
+                    console.log("Audio networkState:", audio.networkState);
+                    console.log("Audio error:", audio.error);
+
+                    // Try to play manually
+                    console.log("Attempting manual play...");
+                    audio
+                      .play()
+                      .then(() => console.log("✅ Manual play SUCCESS"))
+                      .catch((err) =>
+                        console.error("❌ Manual play FAILED:", err.message),
+                      );
+                  }
+                  console.log("=========================");
+                }}
+                className="w-full rounded bg-blue-700 px-3 py-2 text-xs font-semibold text-white transition-all hover:bg-blue-600"
+              >
+                🔍 Debug Audio Connection
+              </button>
+            </>
           )}
 
           {/* Call Control Buttons */}
