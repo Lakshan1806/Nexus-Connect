@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import PeerCard from "./PeerCard.jsx";
 import LANDiscovery from "./LANDiscovery.jsx";
+import FileTransferModal from "./FileTransferModal.jsx";
 
 function ChatShell({
   activeUser,
@@ -38,6 +39,9 @@ function ChatShell({
 
    // State for LAN discovery modal
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
+  
+  // State for file transfer modal
+  const [fileTransferOpen, setFileTransferOpen] = useState(false);
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-slate-950">
@@ -105,6 +109,28 @@ function ChatShell({
                     />
                   </svg>
                   <span>Find LAN Peers</span>
+                </button>
+
+                {/* P2P File Transfer Button */}
+                <button
+                  type="button"
+                  onClick={() => setFileTransferOpen(true)}
+                  className="hover:border-brand-400 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-300 transition hover:text-white"
+                >
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                    />
+                  </svg>
+                  <span>File Transfer</span>
                 </button>
 
                 <button
@@ -277,6 +303,14 @@ function ChatShell({
           username={session.user}
           isOpen={discoveryOpen}
           onClose={() => setDiscoveryOpen(false)}
+        />
+        
+        {/* File Transfer Modal */}
+        <FileTransferModal
+          isOpen={fileTransferOpen}
+          onClose={() => setFileTransferOpen(false)}
+          selectedPeer={peer}
+          session={session}
         />
       </div>
     </div>
