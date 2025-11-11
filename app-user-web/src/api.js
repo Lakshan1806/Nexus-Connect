@@ -127,4 +127,34 @@ export function getDownloadUrl(filename) {
   return `${API_BASE}/api/filetransfer/download/${encodeURIComponent(filename)}`
 }
 
+// Whiteboard API functions
+export async function createWhiteboardSession(user1, user2) {
+  return request('/api/whiteboard/create', {
+    method: 'POST',
+    json: { initiator: user1, participant: user2 }
+  })
+}
+
+export async function sendWhiteboardDrawCommand(sessionId, username, type, x1, y1, x2, y2, color, thickness) {
+  return request('/api/whiteboard/draw', {
+    method: 'POST',
+    json: { sessionId, username, type, x1, y1, x2, y2, color, thickness }
+  })
+}
+
+export async function fetchWhiteboardCommands(sessionId, username) {
+  return request(`/api/whiteboard/session/${encodeURIComponent(sessionId)}?username=${encodeURIComponent(username)}`)
+}
+
+export async function closeWhiteboardSession(sessionId, username) {
+  return request('/api/whiteboard/close', {
+    method: 'POST',
+    json: { sessionId, username }
+  })
+}
+
+export async function fetchPendingWhiteboardSessions(username) {
+  return request(`/api/whiteboard/pending/${encodeURIComponent(username)}`)
+}
+
 export { API_BASE }
