@@ -4,6 +4,7 @@ import VoicePanel from "./VoicePanel.jsx";
 import IncomingCallModal from "./IncomingCallModal.jsx";
 import LANDiscovery from "./LANDiscovery.jsx";
 import FileTransferModal from "./FileTransferModal.jsx";
+import WhiteboardCanvas from "./WhiteboardCanvas.jsx";
 
 function ChatShell({
   activeUser,
@@ -30,6 +31,7 @@ function ChatShell({
   onAcceptCall,
   onRejectCall,
   voiceChat,
+  whiteboard,
 }) {
   const refreshedAt = useMemo(() => {
     if (!lastRefreshed) return null;
@@ -225,6 +227,27 @@ function ChatShell({
                 }}
               />
             )}
+
+            {/* Whiteboard Button */}
+            {selectedUser && selectedUser.user !== session.user && (
+              <button
+                type="button"
+                onClick={() => {
+                  console.log('[ChatShell] Whiteboard button clicked');
+                  console.log('[ChatShell] Current user:', session.user);
+                  console.log('[ChatShell] Selected user:', selectedUser.user);
+                  console.log('[ChatShell] Whiteboard state:', whiteboard);
+                  whiteboard.createSession(session.user, selectedUser.user);
+                }}
+                disabled={whiteboard?.isOpen}
+                className="flex items-center justify-center gap-2 rounded-2xl bg-brand-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-400 disabled:cursor-not-allowed disabled:bg-brand-500/40"
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+                <span>{whiteboard?.isOpen ? "Whiteboard Active" : "Open Whiteboard"}</span>
+              </button>
+            )}
           </aside>
 
           <section className="flex min-h-[60vh] flex-1 flex-col rounded-3xl border border-white/5 bg-slate-900/60 shadow-inner backdrop-blur-sm">
@@ -343,6 +366,12 @@ function ChatShell({
           onClose={() => setFileTransferOpen(false)}
           selectedPeer={peer}
           session={session}
+        />
+
+        {/* Whiteboard Canvas */}
+        <WhiteboardCanvas
+          whiteboard={whiteboard}
+          currentUser={session?.user}
         />
       </div>
     </div>

@@ -9,7 +9,10 @@ import {
 } from "./api.js";
 import LoginScreen from "./components/LoginScreen.jsx";
 import ChatShell from "./components/ChatShell.jsx";
+import WhiteboardCanvas from "./components/WhiteboardCanvas.jsx";
+import IncomingWhiteboardModal from "./components/IncomingWhiteboardModal.jsx";
 import { useVoiceChat } from "./hooks/useVoiceChat.js";
+import { useWhiteboard } from "./hooks/useWhiteboard.js";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -55,6 +58,9 @@ function App() {
 
   // Voice chat functionality
   const voiceChat = useVoiceChat(API_BASE);
+
+  // Whiteboard functionality
+  const whiteboard = useWhiteboard();
 
   const sessionRef = useRef(session);
   useEffect(() => {
@@ -184,6 +190,17 @@ function App() {
 
     return () => clearInterval(pollInterval);
   }, [session, voiceChat]);
+
+  // Poll for incoming whiteboard invitations every 2 seconds
+  useEffect(() => {
+    if (!session) return;
+
+    const pollInterval = setInterval(() => {
+      whiteboard.checkPendingSessions(session.user);
+    }, 2000);
+
+    return () => clearInterval(pollInterval);
+  }, [session, whiteboard]);
 
   const handleInputChange = useCallback(
     (field) => (event) => {
@@ -318,32 +335,41 @@ function App() {
   }
 
   return (
-    <ChatShell
-      activeUser={activeUser}
-      apiBase={API_BASE}
-      lastRefreshed={lastRefreshed}
-      messages={messages}
-      messagesEndRef={messagesEndRef}
-      messageText={messageText}
-      onLogout={handleLogout}
-      onMessageChange={(event) => setMessageText(event.target.value)}
-      onSendMessage={handleSendMessage}
-      onSelectUser={handleSelectUser}
-      peerDetails={peerDetails}
-      peerError={peerError}
-      peerLoading={peerLoading}
-      selectedUser={selectedUser}
-      sendingMessage={sendingMessage}
-      session={session}
-      syncError={syncError}
-      timeFormatter={timeFormatter}
-      users={sortedUsers}
-      incomingCalls={voiceChat.incomingCalls}
-      currentUserPort={activeUser?.voiceUdp}
-      onAcceptCall={voiceChat.acceptIncomingCall}
-      onRejectCall={voiceChat.rejectIncomingCall}
-      voiceChat={voiceChat}
-    />
+    <>
+      <IncomingWhiteboardModal
+        pendingSessions={whiteboard.pendingSessions}
+        currentUser={session?.user}
+        onAccept={whiteboard.acceptInvitation}
+        onReject={whiteboard.rejectInvitation}
+      />
+      <ChatShell
+        activeUser={activeUser}
+        apiBase={API_BASE}
+        lastRefreshed={lastRefreshed}
+        messages={messages}
+        messagesEndRef={messagesEndRef}
+        messageText={messageText}
+        onLogout={handleLogout}
+        onMessageChange={(event) => setMessageText(event.target.value)}
+        onSendMessage={handleSendMessage}
+        onSelectUser={handleSelectUser}
+        peerDetails={peerDetails}
+        peerError={peerError}
+        peerLoading={peerLoading}
+        selectedUser={selectedUser}
+        sendingMessage={sendingMessage}
+        session={session}
+        syncError={syncError}
+        timeFormatter={timeFormatter}
+        users={sortedUsers}
+        incomingCalls={voiceChat.incomingCalls}
+        currentUserPort={activeUser?.voiceUdp}
+        onAcceptCall={voiceChat.acceptIncomingCall}
+        onRejectCall={voiceChat.rejectIncomingCall}
+        voiceChat={voiceChat}
+        whiteboard={whiteboard}
+      />
+    </>
   );
 }
 
