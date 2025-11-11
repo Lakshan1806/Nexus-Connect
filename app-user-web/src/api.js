@@ -82,4 +82,49 @@ export async function fetchPeerDetails(user) {
   }
 }
 
+// Add these functions to your existing app-user-web/src/api.js file
+
+export async function broadcastDiscovery(username, additionalInfo = '') {
+  return request('/api/discovery/broadcast', {
+    method: 'POST',
+    json: { username, additionalInfo }
+  })
+}
+
+export async function fetchDiscoveredPeers() {
+  return request('/api/discovery/peers')
+}
+
+export async function fetchDiscoveredPeer(username) {
+  return request(`/api/discovery/peers/${encodeURIComponent(username)}`)
+}
+
+// File Transfer API functions (Member 3 - P2P File Transfer)
+export async function sendFileTransfer({ peerIp, peerPort, filePath, senderUsername }) {
+  return request('/api/filetransfer/send', {
+    method: 'POST',
+    json: { peerIp, peerPort, filePath, senderUsername }
+  })
+}
+
+export async function getUserTransfers(username) {
+  return request(`/api/filetransfer/transfers/${encodeURIComponent(username)}`)
+}
+
+export async function getTransferProgress(username, transferId) {
+  return request(`/api/filetransfer/transfer/${encodeURIComponent(username)}/${encodeURIComponent(transferId)}`)
+}
+
+export async function getFileTransferStatus(username) {
+  return request(`/api/filetransfer/status/${encodeURIComponent(username)}`)
+}
+
+export async function listDownloads() {
+  return request('/api/filetransfer/downloads')
+}
+
+export function getDownloadUrl(filename) {
+  return `${API_BASE}/api/filetransfer/download/${encodeURIComponent(filename)}`
+}
+
 export { API_BASE }
