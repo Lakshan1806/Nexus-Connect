@@ -1,1 +1,8 @@
 .idea/
+
+# Environment files
+.env
+.env.local
+
+###readme files
+*.md

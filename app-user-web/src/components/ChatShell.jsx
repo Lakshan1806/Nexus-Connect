@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
 import PeerCard from "./PeerCard.jsx";
+import VoicePanel from "./VoicePanel.jsx";
+import IncomingCallModal from "./IncomingCallModal.jsx";
 import LANDiscovery from "./LANDiscovery.jsx";
 import FileTransferModal from "./FileTransferModal.jsx";
 
@@ -23,6 +25,11 @@ function ChatShell({
   syncError,
   timeFormatter,
   users,
+  incomingCalls,
+  currentUserPort,
+  onAcceptCall,
+  onRejectCall,
+  voiceChat,
 }) {
   const refreshedAt = useMemo(() => {
     if (!lastRefreshed) return null;
@@ -45,6 +52,15 @@ function ChatShell({
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-slate-950">
+      {/* Incoming Call Modal */}
+      <IncomingCallModal
+        incomingCalls={incomingCalls}
+        currentUser={session?.user}
+        localVoicePort={currentUserPort}
+        onAccept={onAcceptCall}
+        onReject={onRejectCall}
+      />
+
       <div
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(51,105,230,0.25),transparent_65%)]"
         aria-hidden="true"
@@ -191,6 +207,22 @@ function ChatShell({
                 peerLoading={peerLoading}
                 selectedUser={selectedUser}
                 session={session}
+              />
+            )}
+            {selectedUser && (
+              <VoicePanel
+                apiBase={apiBase}
+                currentUser={session}
+                selectedUser={selectedUser}
+                peerDetails={peerDetails}
+                localVoicePort={activeUser?.voiceUdp}
+                voiceChat={voiceChat}
+                onVoiceSessionStart={(sessionId) => {
+                  console.log("Voice session started:", sessionId);
+                }}
+                onVoiceSessionEnd={() => {
+                  console.log("Voice session ended");
+                }}
               />
             )}
           </aside>
