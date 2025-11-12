@@ -10,6 +10,7 @@ function WhiteboardCanvas({ whiteboard }) {
   const [lastPos, setLastPos] = useState({ x: 0, y: 0 })
   const [currentColor, setCurrentColor] = useState('#000000')
   const [thickness, setThickness] = useState(2)
+  const [eraserSize, setEraserSize] = useState(20)
   const [tool, setTool] = useState('pen') // 'pen' or 'eraser'
 
   const colors = ['#000000', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF', '#FFFFFF']
@@ -39,13 +40,18 @@ function WhiteboardCanvas({ whiteboard }) {
 
     const ctx = canvas.getContext('2d')
     
-    // Clear and redraw
+    // Clear canvas
     ctx.fillStyle = '#FFFFFF'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-    // Draw all commands
+    // Set line properties for smooth drawing
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.globalCompositeOperation = 'source-over'
+
+    // First pass: Draw all non-eraser strokes
     whiteboard.commands.forEach(cmd => {
-      if (cmd.type === 'draw') {
+      if (cmd.type === 'draw' && cmd.color !== '#FFFFFF') {
         ctx.strokeStyle = cmd.color
         ctx.lineWidth = cmd.thickness
         ctx.beginPath()
@@ -54,6 +60,22 @@ function WhiteboardCanvas({ whiteboard }) {
         ctx.stroke()
       }
     })
+
+    // Second pass: Apply eraser strokes using destination-out
+    ctx.globalCompositeOperation = 'destination-out'
+    whiteboard.commands.forEach(cmd => {
+      if (cmd.type === 'draw' && cmd.color === '#FFFFFF') {
+        ctx.strokeStyle = 'rgba(0,0,0,1)'
+        ctx.lineWidth = cmd.thickness
+        ctx.beginPath()
+        ctx.moveTo(cmd.x1, cmd.y1)
+        ctx.lineTo(cmd.x2, cmd.y2)
+        ctx.stroke()
+      }
+    })
+    
+    // Reset composite operation
+    ctx.globalCompositeOperation = 'source-over'
   }, [whiteboard.commands])
 
   const getMousePos = (e) => {
@@ -76,7 +98,7 @@ function WhiteboardCanvas({ whiteboard }) {
 
     const pos = getMousePos(e)
     const color = tool === 'eraser' ? '#FFFFFF' : currentColor
-    const lineThickness = tool === 'eraser' ? 10 : thickness
+    const lineThickness = tool === 'eraser' ? eraserSize : thickness
 
     // Send drawing command to server
     whiteboard.sendDrawCommand(
@@ -194,6 +216,22 @@ function WhiteboardCanvas({ whiteboard }) {
             </div>
           )}
 
+          {/* Eraser Size */}
+          {tool === 'eraser' && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-400">Eraser Size:</span>
+              <input
+                type="range"
+                min="5"
+                max="50"
+                value={eraserSize}
+                onChange={(e) => setEraserSize(parseInt(e.target.value))}
+                className="h-2 w-24 cursor-pointer rounded-lg bg-slate-700 accent-brand-500"
+              />
+              <span className="text-xs font-semibold text-slate-300">{eraserSize}px</span>
+            </div>
+          )}
+
           <div className="flex-1" />
 
           {/* Clear Button */}
@@ -221,7 +259,10 @@ function WhiteboardCanvas({ whiteboard }) {
           <div className="absolute bottom-6 left-6 rounded-lg bg-slate-900/90 px-3 py-2 text-xs text-white">
             <div className="flex items-center gap-2">
               <div className="h-2 w-2 animate-pulse rounded-full bg-green-400" />
-              <span>Connected • {whiteboard.commands.length} strokes</span>
+              <span>
+                {tool === 'eraser' ? '🧹 Erasing' : '✏️ Drawing'} • 
+                {' '}{whiteboard.commands.filter(cmd => cmd.color !== '#FFFFFF').length} strokes
+              </span>
             </div>
           </div>
         </div>
