@@ -130,9 +130,7 @@ export function useVoiceChat(apiBase = API_BASE) {
     
     try {
       setIsCheckingCalls(true)
-      const response = await axios.get(`${apiBase}/api/voice/incoming`, {
-        params: { user: currentUser }
-      })
+      const response = await axios.get(`${apiBase}/api/voice/incoming`)
       const calls = response.data || []
       if (calls.length > 0) {
         console.log(`[VoiceChat] ${calls.length} incoming call(s) for ${currentUser}:`, calls)
@@ -384,8 +382,7 @@ export function useVoiceChat(apiBase = API_BASE) {
       console.log(`[VoiceChat] Accepting call ${sessionId} as user ${currentUser}`)
       
       const response = await axios.post(`${apiBase}/api/voice/accept/${sessionId}`, {
-        accepter: currentUser,
-        localUdpPort: localUdpPort
+        localUdpPort
       })
       
       const { state, initiator, initiatorIp, initiatorPort } = response.data
@@ -488,9 +485,7 @@ export function useVoiceChat(apiBase = API_BASE) {
     try {
       console.log(`[VoiceChat] Rejecting call ${sessionId}`)
       
-      await axios.post(`${apiBase}/api/voice/reject/${sessionId}`, null, {
-        params: { user: currentUser }
-      })
+      await axios.post(`${apiBase}/api/voice/reject/${sessionId}`)
       
       // Remove from incoming calls list
       setIncomingCalls(prev => prev.filter(call => call.sessionId !== sessionId))
