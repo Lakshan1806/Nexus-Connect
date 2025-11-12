@@ -324,7 +324,7 @@ function ChatShell({
                   rows={1}
                   value={messageText}
                   onChange={onMessageChange}
-                  placeholder="Type a message to everyone…"
+                  placeholder="Type a message to everyone..."
                   className="h-12 w-full resize-none bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
                 />
                 <button
@@ -332,7 +332,7 @@ function ChatShell({
                   disabled={sendingMessage || !messageText.trim()}
                   className="bg-brand-500 hover:bg-brand-400 disabled:bg-brand-500/60 inline-flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white transition disabled:cursor-not-allowed"
                 >
-                  <span>{sendingMessage ? "Sending…" : "Send"}</span>
+                  <span>{sendingMessage ? "Sending..." : "Send"}</span>
                   <svg
                     aria-hidden="true"
                     xmlns="http://www.w3.org/2000/svg"

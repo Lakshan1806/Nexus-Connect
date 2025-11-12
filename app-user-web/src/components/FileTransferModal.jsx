@@ -146,7 +146,6 @@ function FileTransferModal({ isOpen, onClose, selectedPeer, session }) {
         peerIp: selectedPeer.ip,
         peerPort: selectedPeer.fileTcp,
         filePath: normalizedPath,
-        senderUsername: session.user
       });
 
       if (result.success) {
