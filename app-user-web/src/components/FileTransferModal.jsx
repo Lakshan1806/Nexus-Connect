@@ -157,7 +157,20 @@ function FileTransferModal({ isOpen, onClose, selectedPeer, session }) {
       }
     } catch (err) {
       console.error('File transfer failed:', err);
-      setError(err.message || 'Failed to initiate file transfer');
+      console.error('Error details:', {
+        status: err.status,
+        message: err.message,
+        payload: err.payload
+      });
+      
+      // More detailed error message
+      if (err.status === 403) {
+        setError('Access forbidden. Please try logging in again.');
+      } else if (err.status === 401) {
+        setError('Unauthorized. Please log in again.');
+      } else {
+        setError(err.message || 'Failed to initiate file transfer');
+      }
     } finally {
       setSending(false);
     }
@@ -297,9 +310,6 @@ function FileTransferModal({ isOpen, onClose, selectedPeer, session }) {
                   </p>
                 </div>
               </div>
-              <p className="mt-1 text-xs text-slate-500">
-                Use forward slashes or double backslashes in paths
-              </p>
               <p className="mt-1 text-xs text-slate-400">
                 Example: C:/Users/Admin/Desktop/file.pdf or C:\\Users\\Admin\\Desktop\\file.pdf
               </p>
