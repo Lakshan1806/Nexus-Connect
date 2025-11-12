@@ -1,6 +1,7 @@
 package com.nexusconnect.servicebackend.web;
 
 import com.nexusconnect.servicebackend.filetransfer.FileTransferService;
+import com.nexusconnect.servicebackend.security.AuthenticatedUser;
 import com.nexusconnect.servicebackend.web.dto.FileTransferProgressDto;
 import com.nexusconnect.servicebackend.web.dto.FileTransferRequest;
 import com.nexusconnect.servicebackend.web.dto.FileTransferResponse;
@@ -10,6 +11,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
@@ -46,13 +48,17 @@ public class FileTransferController {
      */
     @PostMapping("/send")
     public CompletableFuture<ResponseEntity<FileTransferResponse>> sendFile(
+            @AuthenticationPrincipal AuthenticatedUser principal,
             @Valid @RequestBody FileTransferRequest request) {
-        
+        if (principal == null) {
+            return CompletableFuture.completedFuture(ResponseEntity.status(401).build());
+        }
+
         return fileTransferService.sendFile(
                 request.peerIp(),
                 request.peerPort(),
                 request.filePath(),
-                request.senderUsername()
+                principal.username()
         ).thenApply(result -> {
             if (result.isSuccess()) {
                 return ResponseEntity.ok(FileTransferResponse.success(
@@ -75,8 +81,12 @@ public class FileTransferController {
      */
     @GetMapping("/transfers/{username}")
     public ResponseEntity<List<FileTransferProgressDto>> getUserTransfers(
+            @AuthenticationPrincipal AuthenticatedUser principal,
             @PathVariable String username) {
-        
+        if (principal == null || !principal.username().equalsIgnoreCase(username)) {
+            return ResponseEntity.status(403).build();
+        }
+
         Map<String, com.nexusconnect.servicebackend.filetransfer.FileTransferServer.FileTransferProgress> transfers =
                 fileTransferService.getTransfersForUser(username);
         
@@ -93,9 +103,13 @@ public class FileTransferController {
      */
     @GetMapping("/transfer/{username}/{transferId}")
     public ResponseEntity<FileTransferProgressDto> getTransferProgress(
+            @AuthenticationPrincipal AuthenticatedUser principal,
             @PathVariable String username,
             @PathVariable String transferId) {
-        
+        if (principal == null || !principal.username().equalsIgnoreCase(username)) {
+            return ResponseEntity.status(403).build();
+        }
+
         var progress = fileTransferService.getTransferProgress(username, transferId);
         if (progress == null) {
             return ResponseEntity.notFound().build();
@@ -109,7 +123,12 @@ public class FileTransferController {
      * GET /api/filetransfer/status/{username}
      */
     @GetMapping("/status/{username}")
-    public ResponseEntity<Map<String, Object>> getServerStatus(@PathVariable String username) {
+    public ResponseEntity<Map<String, Object>> getServerStatus(
+            @AuthenticationPrincipal AuthenticatedUser principal,
+            @PathVariable String username) {
+        if (principal == null || !principal.username().equalsIgnoreCase(username)) {
+            return ResponseEntity.status(403).build();
+        }
         boolean running = fileTransferService.isServerRunning(username);
         return ResponseEntity.ok(Map.of(
                 "username", username,

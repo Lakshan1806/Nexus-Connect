@@ -17,7 +17,7 @@ function PeerCard({ peer, peerError, peerLoading, selectedUser, session }) {
         </p>
       ) : peerLoading ? (
         <p className="mt-2 text-xs text-slate-500">
-          Fetching live peer details…
+          Fetching live peer details...
         </p>
       ) : peerError ? (
         <p className="mt-2 text-xs text-amber-300">{peerError}</p>

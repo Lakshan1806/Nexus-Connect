@@ -1,76 +1,84 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   API_BASE,
+  connectToLobby,
+  disconnectFromLobby as disconnectFromLobbyApi,
   fetchPeerDetails,
   fetchSnapshot,
-  login as loginRequest,
-  logout as logoutRequest,
+  fetchCurrentUser,
   sendChat,
-} from "./api.js";
-import LoginScreen from "./components/LoginScreen.jsx";
-import ChatShell from "./components/ChatShell.jsx";
-import WhiteboardCanvas from "./components/WhiteboardCanvas.jsx";
-import IncomingWhiteboardModal from "./components/IncomingWhiteboardModal.jsx";
-import { useVoiceChat } from "./hooks/useVoiceChat.js";
-import { useWhiteboard } from "./hooks/useWhiteboard.js";
+  setAuthToken,
+  signIn,
+  signUp,
+} from "./api.js"
+import AuthScreen from "./components/AuthScreen.jsx"
+import LoginScreen from "./components/LoginScreen.jsx"
+import ChatShell from "./components/ChatShell.jsx"
+import IncomingWhiteboardModal from "./components/IncomingWhiteboardModal.jsx"
+import { useVoiceChat } from "./hooks/useVoiceChat.js"
+import { useWhiteboard } from "./hooks/useWhiteboard.js"
 
-const POLL_INTERVAL_MS = 4000;
+const POLL_INTERVAL_MS = 4000
+const TOKEN_STORAGE_KEY = "nexusconnect_token"
 
 const dedupeMessages = (messages) => {
-  const map = new Map();
+  const map = new Map()
   for (const message of messages ?? []) {
-    if (!message) continue;
-    const key = `${message.timestampSeconds ?? 0}-${message.from ?? ""}-${message.text ?? ""}`;
-    map.set(key, message);
+    if (!message) continue
+    const key = `${message.timestampSeconds ?? 0}-${message.from ?? ""}-${message.text ?? ""}`
+    map.set(key, message)
   }
-  return Array.from(map.values()).sort(
-    (a, b) => (a?.timestampSeconds ?? 0) - (b?.timestampSeconds ?? 0),
-  );
-};
-
-const portValue = (value) => {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-};
+  return Array.from(map.values()).sort((a, b) => (a?.timestampSeconds ?? 0) - (b?.timestampSeconds ?? 0))
+}
 
 function App() {
-  const [credentials, setCredentials] = useState({
-    user: "",
-    pass: "",
+  const [authUser, setAuthUser] = useState(() => {
+    if (typeof window === "undefined") return null
+    return null
+  })
+  const [token, setToken] = useState(() => {
+    if (typeof window === "undefined") return ""
+    return window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? ""
+  })
+  const [authInitializing, setAuthInitializing] = useState(() => {
+    if (typeof window === "undefined") return false
+    return !!window.localStorage.getItem(TOKEN_STORAGE_KEY)
+  })
+  const [authPending, setAuthPending] = useState(false)
+  const [authError, setAuthError] = useState("")
+
+  const [connectOptions, setConnectOptions] = useState({
     fileTcp: "",
     voiceUdp: "",
-  });
-  const [loginPending, setLoginPending] = useState(false);
-  const [loginError, setLoginError] = useState("");
-  const [session, setSession] = useState(null);
-  const [users, setUsers] = useState([]);
-  const [messages, setMessages] = useState([]);
-  const [selectedUser, setSelectedUser] = useState(null);
-  const [peerDetails, setPeerDetails] = useState(null);
-  const [peerError, setPeerError] = useState("");
-  const [peerLoading, setPeerLoading] = useState(false);
-  const [messageText, setMessageText] = useState("");
-  const [sendingMessage, setSendingMessage] = useState(false);
-  const [syncError, setSyncError] = useState("");
-  const [lastRefreshed, setLastRefreshed] = useState(null);
+    ipOverride: "",
+  })
+  const [loginPending, setLoginPending] = useState(false)
+  const [loginError, setLoginError] = useState("")
 
-  // Voice chat functionality
-  const voiceChat = useVoiceChat(API_BASE);
+  const [session, setSession] = useState(null)
+  const [users, setUsers] = useState([])
+  const [messages, setMessages] = useState([])
+  const [selectedUser, setSelectedUser] = useState(null)
+  const [peerDetails, setPeerDetails] = useState(null)
+  const [peerError, setPeerError] = useState("")
+  const [peerLoading, setPeerLoading] = useState(false)
+  const [messageText, setMessageText] = useState("")
+  const [sendingMessage, setSendingMessage] = useState(false)
+  const [syncError, setSyncError] = useState("")
+  const [lastRefreshed, setLastRefreshed] = useState(null)
 
-  // Whiteboard functionality
-  const whiteboard = useWhiteboard();
+  const voiceChat = useVoiceChat(API_BASE)
+  const whiteboard = useWhiteboard()
 
-  const sessionRef = useRef(session);
+  const sessionRef = useRef(session)
   useEffect(() => {
-    sessionRef.current = session;
-  }, [session]);
+    sessionRef.current = session
+  }, [session])
 
-  const messagesEndRef = useRef(null);
+  const messagesEndRef = useRef(null)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages])
 
   const timeFormatter = useMemo(
     () =>
@@ -79,259 +87,324 @@ function App() {
         minute: "2-digit",
       }),
     [],
-  );
+  )
 
-  const sortedUsers = useMemo(
-    () => [...users].sort((a, b) => a.user.localeCompare(b.user)),
-    [users],
-  );
+  const sortedUsers = useMemo(() => [...users].sort((a, b) => a.user.localeCompare(b.user)), [users])
+
+  const clearAuthState = useCallback(() => {
+    setAuthUser(null)
+    setToken("")
+    setAuthToken(null)
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(TOKEN_STORAGE_KEY)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!token) {
+      setAuthToken(null)
+      setAuthInitializing(false)
+      return
+    }
+    setAuthToken(token)
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(TOKEN_STORAGE_KEY, token)
+    }
+    if (authUser) {
+      setAuthInitializing(false)
+      return
+    }
+    setAuthInitializing(true)
+    fetchCurrentUser()
+      .then((user) => {
+        setAuthUser(user)
+      })
+      .catch(() => {
+        clearAuthState()
+      })
+      .finally(() => setAuthInitializing(false))
+  }, [token, authUser, clearAuthState])
 
   useEffect(() => {
     if (!session) {
-      setSelectedUser(null);
-      return;
+      setSelectedUser(null)
+      return
     }
     setSelectedUser((previous) => {
       if (previous) {
-        const stillOnline = sortedUsers.find(
-          (user) => user.user === previous.user,
-        );
-        if (stillOnline) return stillOnline;
+        const stillOnline = sortedUsers.find((user) => user.user === previous.user)
+        if (stillOnline) return stillOnline
       }
-      const self = sortedUsers.find((user) => user.user === session.user);
-      if (self) return self;
-      return sortedUsers[0] ?? null;
-    });
-  }, [session, sortedUsers]);
+      const self = sortedUsers.find((user) => user.user === session.user)
+      if (self) return self
+      return sortedUsers[0] ?? null
+    })
+  }, [session, sortedUsers])
 
   const refreshOnce = useCallback(async () => {
-    const currentSession = sessionRef.current;
-    if (!currentSession) return;
-    const currentUser = currentSession.user;
+    const currentSession = sessionRef.current
+    if (!currentSession) return
+    const currentUser = currentSession.user
     try {
-      const { users: freshUsers, messages: freshMessages } =
-        await fetchSnapshot();
-      if (!sessionRef.current || sessionRef.current.user !== currentUser)
-        return;
-      setUsers(freshUsers);
-      setMessages(dedupeMessages(freshMessages));
-      setSyncError("");
-      setLastRefreshed(Date.now());
+      const { users: freshUsers, messages: freshMessages } = await fetchSnapshot()
+      if (!sessionRef.current || sessionRef.current.user !== currentUser) return
+      setUsers(freshUsers)
+      setMessages(dedupeMessages(freshMessages))
+      setSyncError("")
+      setLastRefreshed(Date.now())
     } catch (error) {
       if (sessionRef.current && sessionRef.current.user === currentUser) {
-        setSyncError("Connection unstable. Trying to resync…");
+        setSyncError("Connection unstable. Trying to resync...")
       }
-      throw error;
+      throw error
     }
-  }, []);
+  }, [])
 
   useEffect(() => {
-    if (!session) return undefined;
-    let cancelled = false;
+    if (!session) return undefined
+    let cancelled = false
 
     const tick = async () => {
       try {
-        await refreshOnce();
+        await refreshOnce()
       } catch (error) {
-        if (cancelled) return;
-        console.debug("refresh failed", error);
+        if (cancelled) return
+        console.debug("refresh failed", error)
       }
-    };
+    }
 
-    tick();
-    const interval = window.setInterval(tick, POLL_INTERVAL_MS);
+    tick()
+    const interval = window.setInterval(tick, POLL_INTERVAL_MS)
 
     return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [session, refreshOnce]);
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [session, refreshOnce])
 
   useEffect(() => {
     if (!session || !selectedUser || selectedUser.user === session.user) {
-      setPeerDetails(null);
-      setPeerError("");
-      setPeerLoading(false);
-      return;
+      setPeerDetails(null)
+      setPeerError("")
+      setPeerLoading(false)
+      return
     }
-    let active = true;
-    setPeerLoading(true);
-    setPeerError("");
+    let active = true
+    setPeerLoading(true)
+    setPeerError("")
     fetchPeerDetails(selectedUser.user)
       .then((details) => {
-        if (!active) return;
-        setPeerDetails(details);
+        if (!active) return
+        setPeerDetails(details)
         if (!details) {
-          setPeerError("Peer is offline or did not publish details yet.");
+          setPeerError("Peer is offline or did not publish details yet.")
         }
       })
       .catch((error) => {
-        if (!active) return;
-        setPeerDetails(null);
-        setPeerError(error.message || "Unable to load peer details");
+        if (!active) return
+        setPeerDetails(null)
+        setPeerError(error.message || "Unable to load peer details")
       })
       .finally(() => {
         if (active) {
-          setPeerLoading(false);
+          setPeerLoading(false)
         }
-      });
+      })
     return () => {
-      active = false;
-    };
-  }, [session, selectedUser]);
+      active = false
+    }
+  }, [session, selectedUser])
 
-  // Poll for incoming voice calls every 2 seconds
   useEffect(() => {
-    if (!session) return;
+    if (!session) return
 
     const pollInterval = setInterval(() => {
-      voiceChat.checkIncomingCalls(session.user);
-    }, 2000);
+      voiceChat.checkIncomingCalls(session.user)
+    }, 2000)
 
-    return () => clearInterval(pollInterval);
-  }, [session, voiceChat]);
+    return () => clearInterval(pollInterval)
+  }, [session, voiceChat])
 
-  // Poll for incoming whiteboard invitations every 2 seconds
   useEffect(() => {
-    if (!session) return;
+    if (!session) return
 
     const pollInterval = setInterval(() => {
-      whiteboard.checkPendingSessions(session.user);
-    }, 2000);
+      whiteboard.checkPendingSessions(session.user)
+    }, 2000)
 
-    return () => clearInterval(pollInterval);
-  }, [session, whiteboard]);
+    return () => clearInterval(pollInterval)
+  }, [session, whiteboard])
 
-  const handleInputChange = useCallback(
+  const handleOptionChange = useCallback(
     (field) => (event) => {
-      const value = event.target.value;
-      setCredentials((previous) => ({ ...previous, [field]: value }));
+      const value = event.target.value
+      setConnectOptions((previous) => ({ ...previous, [field]: value }))
     },
     [],
-  );
+  )
 
-  const handleLogin = useCallback(
-    async (event) => {
-      event.preventDefault();
-      if (loginPending) return;
-      const user = credentials.user.trim();
-      const pass = credentials.pass.trim();
-      if (!user || !pass) {
-        setLoginError("Username and password are required");
-        return;
-      }
-      setLoginPending(true);
-      setLoginError("");
+  const handleSignIn = useCallback(
+    async (form) => {
+      if (authPending) return
+      setAuthPending(true)
+      setAuthError("")
       try {
-        const payload = { user, pass };
-        const fileTcp = portValue(credentials.fileTcp);
-        if (fileTcp !== undefined) payload.fileTcp = fileTcp;
-        const voiceUdp = portValue(credentials.voiceUdp);
-        if (voiceUdp !== undefined) payload.voiceUdp = voiceUdp;
-
-        const data = await loginRequest(payload);
-        if (!data?.success) {
-          throw new Error(data?.reason || "Login failed");
-        }
-        setSession({ user: data.user });
-        setUsers(Array.isArray(data.users) ? data.users : []);
-        setMessages(
-          dedupeMessages(Array.isArray(data.messages) ? data.messages : []),
-        );
-        setMessageText("");
-        setSyncError("");
-        setLastRefreshed(Date.now());
-        setCredentials((previous) => ({ ...previous, pass: "" }));
-
-        // Request microphone permission for voice chat
-        try {
-          await navigator.mediaDevices.getUserMedia({ audio: true });
-          console.log("[App] Microphone permission granted");
-        } catch (micErr) {
-          console.warn(
-            "[App] Microphone permission denied or unavailable:",
-            micErr,
-          );
-          // Don't fail login, just warn
-        }
+        const response = await signIn(form)
+        setAuthUser(response.user)
+        setToken(response.token)
       } catch (error) {
-        console.error("login failed", error);
-        setLoginError(error.message || "Unable to login. Please try again.");
+        console.error("sign in failed", error)
+        setAuthError(error.message || "Unable to sign in. Please try again.")
       } finally {
-        setLoginPending(false);
+        setAuthPending(false)
       }
     },
-    [credentials, loginPending],
-  );
+    [authPending],
+  )
+
+  const handleSignUp = useCallback(
+    async (form) => {
+      if (authPending) return
+      setAuthPending(true)
+      setAuthError("")
+      try {
+        const response = await signUp(form)
+        setAuthUser(response.user)
+        setToken(response.token)
+      } catch (error) {
+        console.error("sign up failed", error)
+        setAuthError(error.message || "Unable to create account. Please try again.")
+      } finally {
+        setAuthPending(false)
+      }
+    },
+    [authPending],
+  )
+
+  const disconnectFromLobby = useCallback(async () => {
+    const active = sessionRef.current
+    if (!active) return
+    setSession(null)
+    setUsers([])
+    setMessages([])
+    setSelectedUser(null)
+    setPeerDetails(null)
+    setPeerError("")
+    setMessageText("")
+    setSyncError("")
+    try {
+      await disconnectFromLobbyApi()
+    } catch (error) {
+      if (error?.status && error.status !== 404) {
+        console.debug("logout error", error)
+      }
+    } finally {
+      voiceChat.endVoiceCall?.()
+      whiteboard.closeSession()
+    }
+  }, [voiceChat, whiteboard])
 
   const handleLogout = useCallback(async () => {
-    const active = sessionRef.current;
-    if (!active) return;
-    const user = active.user;
-    setSession(null);
-    setUsers([]);
-    setMessages([]);
-    setSelectedUser(null);
-    setPeerDetails(null);
-    setPeerError("");
-    setMessageText("");
-    setSyncError("");
-    try {
-      await logoutRequest(user);
-    } catch (error) {
-      console.debug("logout error", error);
-    }
-  }, []);
+    await disconnectFromLobby()
+    clearAuthState()
+  }, [disconnectFromLobby, clearAuthState])
+
+  const handleConnect = useCallback(
+    async (event) => {
+      event.preventDefault()
+      if (loginPending) return
+      setLoginPending(true)
+      setLoginError("")
+      try {
+        const data = await connectToLobby(connectOptions)
+        if (!data?.success) {
+          throw new Error(data?.reason || "Unable to join lobby.")
+        }
+        setSession({ user: data.user })
+        setUsers(Array.isArray(data.users) ? data.users : [])
+        setMessages(dedupeMessages(Array.isArray(data.messages) ? data.messages : []))
+        setMessageText("")
+        setSyncError("")
+        setLastRefreshed(Date.now())
+      } catch (error) {
+        console.error("connect failed", error)
+        setLoginError(error.message || "Unable to connect. Please try again.")
+      } finally {
+        setLoginPending(false)
+      }
+    },
+    [connectOptions, loginPending],
+  )
 
   const handleSendMessage = useCallback(
     async (event) => {
-      event.preventDefault();
-      if (sendingMessage) return;
-      const current = sessionRef.current;
-      if (!current) return;
-      const draft = messageText.trim();
-      if (!draft) return;
+      event.preventDefault()
+      if (sendingMessage) return
+      const current = sessionRef.current
+      if (!current) return
+      const draft = messageText.trim()
+      if (!draft) return
 
-      setSendingMessage(true);
-      setMessageText("");
+      setSendingMessage(true)
+      setMessageText("")
       try {
-        const ack = await sendChat({ user: current.user, text: draft });
-        if (!sessionRef.current || sessionRef.current.user !== current.user)
-          return;
+        const ack = await sendChat(draft)
+        if (!sessionRef.current || sessionRef.current.user !== current.user) return
         if (ack?.accepted && ack.message) {
-          setMessages((previous) => dedupeMessages([...previous, ack.message]));
-          setSyncError("");
-          setLastRefreshed(Date.now());
+          setMessages((previous) => dedupeMessages([...previous, ack.message]))
+          setSyncError("")
+          setLastRefreshed(Date.now())
         } else {
-          await refreshOnce().catch(() => {});
+          await refreshOnce().catch(() => {})
         }
       } catch (error) {
-        console.error("send message failed", error);
-        setSyncError(error.message || "Unable to send message");
-        setMessageText(draft);
+        console.error("send message failed", error)
+        setSyncError(error.message || "Unable to send message")
+        setMessageText(draft)
       } finally {
-        setSendingMessage(false);
+        setSendingMessage(false)
       }
     },
     [messageText, sendingMessage, refreshOnce],
-  );
+  )
 
   const handleSelectUser = useCallback((user) => {
-    setSelectedUser(user);
-  }, []);
+    setSelectedUser(user)
+  }, [])
 
-  const activeUser = sortedUsers.find((user) => user.user === session?.user);
+  const activeUser = sortedUsers.find((user) => user.user === session?.user)
+
+  if (authInitializing) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-slate-950 text-slate-200">
+        Validating session...
+      </div>
+    )
+  }
+
+  if (!authUser) {
+    return (
+      <AuthScreen
+        onSignIn={handleSignIn}
+        onSignUp={handleSignUp}
+        pending={authPending}
+        errorMessage={authError}
+      />
+    )
+  }
 
   if (!session) {
     return (
       <LoginScreen
-        credentials={credentials}
+        authUser={authUser}
+        credentials={connectOptions}
         loginError={loginError}
         loginPending={loginPending}
-        onChange={handleInputChange}
-        onSubmit={handleLogin}
+        onChange={handleOptionChange}
+        onSubmit={handleConnect}
+        onSignOut={handleLogout}
       />
-    );
+    )
   }
 
   return (
@@ -370,7 +443,7 @@ function App() {
         whiteboard={whiteboard}
       />
     </>
-  );
+  )
 }
 
-export default App;
+export default App

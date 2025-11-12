@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react'
+import { useRef, useEffect, useState, useCallback } from 'react'
 
 /**
  * Shared Whiteboard Component
@@ -15,10 +15,18 @@ function WhiteboardCanvas({ whiteboard }) {
 
   const colors = ['#000000', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF', '#FFFFFF']
 
-  // Initialize canvas
-  useEffect(() => {
+  const redrawCanvas = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+
+    const width = canvas.clientWidth || canvas.offsetWidth
+    const height = canvas.clientHeight || canvas.offsetHeight
+    if (!width || !height) return
+
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width
+      canvas.height = height
+    }
 
     const ctx = canvas.getContext('2d')
     ctx.lineCap = 'round'
@@ -58,6 +66,9 @@ function WhiteboardCanvas({ whiteboard }) {
         ctx.moveTo(cmd.x1, cmd.y1)
         ctx.lineTo(cmd.x2, cmd.y2)
         ctx.stroke()
+      } else if (cmd.type === 'clear') {
+        ctx.fillStyle = '#FFFFFF'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
       }
     })
 
@@ -77,6 +88,21 @@ function WhiteboardCanvas({ whiteboard }) {
     // Reset composite operation
     ctx.globalCompositeOperation = 'source-over'
   }, [whiteboard.commands])
+
+  useEffect(() => {
+    if (!whiteboard.isOpen) return
+    redrawCanvas()
+  }, [whiteboard.isOpen, redrawCanvas])
+
+  useEffect(() => {
+    if (!whiteboard.isOpen) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const observer = new ResizeObserver(() => redrawCanvas())
+    observer.observe(canvas)
+    return () => observer.disconnect()
+  }, [whiteboard.isOpen, redrawCanvas])
 
   const getMousePos = (e) => {
     const canvas = canvasRef.current
