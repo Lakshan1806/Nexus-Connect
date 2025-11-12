@@ -12,6 +12,7 @@ import java.nio.channels.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 
@@ -28,6 +29,10 @@ public class NioChatServer implements Runnable {
     private final ConcurrentHashMap<String, Presence> online = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<SocketChannel, Session> sessions = new ConcurrentHashMap<>();
     private final Deque<ChatMessage> history = new ConcurrentLinkedDeque<>();
+    
+    // Whiteboard sessions
+    private final ConcurrentHashMap<Long, WhiteboardSession> whiteboardSessions = new ConcurrentHashMap<>();
+    private final AtomicLong whiteboardSessionIdCounter = new AtomicLong(0);
 
 
     private volatile boolean running = false;
@@ -159,7 +164,7 @@ public class NioChatServer implements Runnable {
     }
 
     private void handleLine(Session s, String line, String srcIp) {
-        String[] parts = line.split(":", 5);
+        String[] parts = line.split(":", 10);
         String command = parts[0].trim().toUpperCase(Locale.ROOT);
         try {
             switch (command) {
@@ -167,6 +172,11 @@ public class NioChatServer implements Runnable {
                 case "MSG" -> handleGlobalMsg(s, line);
                 case "PEER" -> handleAskPeer(s, parts);
                 case "USERS" -> sendUsersList(s);
+                case "WHITEBOARD_OPEN" -> handleWhiteboardOpen(s, parts);
+                case "WHITEBOARD_DRAW" -> handleWhiteboardDraw(s, parts);
+                case "WHITEBOARD_CLEAR" -> handleWhiteboardClear(s, parts);
+                case "WHITEBOARD_CLOSE" -> handleWhiteboardClose(s, parts);
+                case "WHITEBOARD_SYNC" -> handleWhiteboardSync(s, parts);
                 default -> sendFrame(s, "ERROR:unknown command");
             }
         } catch (Exception e) {
@@ -278,6 +288,253 @@ public class NioChatServer implements Runnable {
                 String.valueOf(presence.voiceUdp()),
                 presence.viaNio() ? "nio" : "http"
         );
+    }
+
+    // ========== Whiteboard Handler Methods ==========
+    
+    private Session findSessionByUsername(String username) {
+        for (Session session : sessions.values()) {
+            if (username.equals(session.username())) {
+                return session;
+            }
+        }
+        return null;
+    }
+    
+    private void handleWhiteboardOpen(Session s, String[] parts) {
+        if (!s.isAuthed()) {
+            sendFrame(s, "ERROR:login first");
+            return;
+        }
+        if (parts.length < 2) {
+            sendFrame(s, "ERROR:missing peer username");
+            return;
+        }
+        String peerUsername = parts[1].trim();
+        
+        // Check if peer is online
+        Presence peerPresence = online.get(peerUsername);
+        if (peerPresence == null) {
+            sendFrame(s, "ERROR:peer offline");
+            return;
+        }
+        
+        // Check if session already exists between these two users
+        WhiteboardSession existingSession = whiteboardSessions.values().stream()
+                .filter(ws -> ws.hasUser(s.username()) && ws.hasUser(peerUsername))
+                .findFirst()
+                .orElse(null);
+        
+        if (existingSession != null) {
+            // Reuse existing session
+            existingSession.updateActivity();
+            sendFrame(s, "WHITEBOARD_CREATED:" + existingSession.getSessionId());
+            
+            // Notify peer of rejoin
+            Session peerSession = findSessionByUsername(peerUsername);
+            if (peerSession != null) {
+                sendFrame(peerSession, "WHITEBOARD_INVITATION:" + existingSession.getSessionId() + ":" + s.username());
+            }
+            return;
+        }
+        
+        // Create new session
+        long sessionId = whiteboardSessionIdCounter.incrementAndGet();
+        WhiteboardSession newSession = new WhiteboardSession(sessionId, s.username(), peerUsername);
+        whiteboardSessions.put(sessionId, newSession);
+        
+        sendFrame(s, "WHITEBOARD_CREATED:" + sessionId);
+        
+        // Notify peer
+        Session peerSession = findSessionByUsername(peerUsername);
+        if (peerSession != null) {
+            sendFrame(peerSession, "WHITEBOARD_INVITATION:" + sessionId + ":" + s.username());
+        }
+    }
+    
+    private void handleWhiteboardDraw(Session s, String[] parts) {
+        if (!s.isAuthed()) {
+            sendFrame(s, "ERROR:login first");
+            return;
+        }
+        // WHITEBOARD_DRAW:sessionId:x1:y1:x2:y2:color:thickness
+        if (parts.length < 8) {
+            sendFrame(s, "ERROR:invalid draw command");
+            return;
+        }
+        
+        try {
+            long sessionId = Long.parseLong(parts[1]);
+            WhiteboardSession session = whiteboardSessions.get(sessionId);
+            
+            if (session == null) {
+                sendFrame(s, "ERROR:session not found");
+                return;
+            }
+            
+            if (!session.hasUser(s.username())) {
+                sendFrame(s, "ERROR:not in session");
+                return;
+            }
+            
+            double x1 = Double.parseDouble(parts[2]);
+            double y1 = Double.parseDouble(parts[3]);
+            double x2 = Double.parseDouble(parts[4]);
+            double y2 = Double.parseDouble(parts[5]);
+            String color = parts[6];
+            int thickness = Integer.parseInt(parts[7]);
+            
+            // Add command to session
+            WhiteboardSession.DrawCommand cmd = WhiteboardSession.DrawCommand.draw(
+                    s.username(), x1, y1, x2, y2, color, thickness);
+            session.addCommand(cmd);
+            
+            // Broadcast to peer
+            String peerUsername = session.getOtherUser(s.username());
+            Session peerSession = findSessionByUsername(peerUsername);
+            if (peerSession != null) {
+                sendFrame(peerSession, String.format(
+                        "WHITEBOARD_COMMAND:%s:%.2f:%.2f:%.2f:%.2f:%s:%d",
+                        s.username(), x1, y1, x2, y2, color, thickness));
+            }
+            
+            sendFrame(s, "OK");
+        } catch (NumberFormatException e) {
+            sendFrame(s, "ERROR:invalid format");
+        }
+    }
+    
+    private void handleWhiteboardClear(Session s, String[] parts) {
+        if (!s.isAuthed()) {
+            sendFrame(s, "ERROR:login first");
+            return;
+        }
+        // WHITEBOARD_CLEAR:sessionId
+        if (parts.length < 2) {
+            sendFrame(s, "ERROR:missing session id");
+            return;
+        }
+        
+        try {
+            long sessionId = Long.parseLong(parts[1]);
+            WhiteboardSession session = whiteboardSessions.get(sessionId);
+            
+            if (session == null) {
+                sendFrame(s, "ERROR:session not found");
+                return;
+            }
+            
+            if (!session.hasUser(s.username())) {
+                sendFrame(s, "ERROR:not in session");
+                return;
+            }
+            
+            // Clear commands and add clear marker
+            session.clearCommands();
+            WhiteboardSession.DrawCommand clearCmd = WhiteboardSession.DrawCommand.clear(s.username());
+            session.addCommand(clearCmd);
+            
+            // Broadcast to peer
+            String peerUsername = session.getOtherUser(s.username());
+            Session peerSession = findSessionByUsername(peerUsername);
+            if (peerSession != null) {
+                sendFrame(peerSession, "WHITEBOARD_CLEARED:" + s.username());
+            }
+            
+            sendFrame(s, "OK");
+        } catch (NumberFormatException e) {
+            sendFrame(s, "ERROR:invalid session id");
+        }
+    }
+    
+    private void handleWhiteboardClose(Session s, String[] parts) {
+        if (!s.isAuthed()) {
+            sendFrame(s, "ERROR:login first");
+            return;
+        }
+        // WHITEBOARD_CLOSE:sessionId
+        if (parts.length < 2) {
+            sendFrame(s, "ERROR:missing session id");
+            return;
+        }
+        
+        try {
+            long sessionId = Long.parseLong(parts[1]);
+            WhiteboardSession session = whiteboardSessions.get(sessionId);
+            
+            if (session == null) {
+                sendFrame(s, "ERROR:session not found");
+                return;
+            }
+            
+            if (!session.hasUser(s.username())) {
+                sendFrame(s, "ERROR:not in session");
+                return;
+            }
+            
+            // Notify peer before removing
+            String peerUsername = session.getOtherUser(s.username());
+            Session peerSession = findSessionByUsername(peerUsername);
+            if (peerSession != null) {
+                sendFrame(peerSession, "WHITEBOARD_CLOSED:" + s.username());
+            }
+            
+            // Remove session
+            whiteboardSessions.remove(sessionId);
+            
+            sendFrame(s, "OK");
+        } catch (NumberFormatException e) {
+            sendFrame(s, "ERROR:invalid session id");
+        }
+    }
+    
+    private void handleWhiteboardSync(Session s, String[] parts) {
+        if (!s.isAuthed()) {
+            sendFrame(s, "ERROR:login first");
+            return;
+        }
+        // WHITEBOARD_SYNC:sessionId
+        if (parts.length < 2) {
+            sendFrame(s, "ERROR:missing session id");
+            return;
+        }
+        
+        try {
+            long sessionId = Long.parseLong(parts[1]);
+            WhiteboardSession session = whiteboardSessions.get(sessionId);
+            
+            if (session == null) {
+                sendFrame(s, "ERROR:session not found");
+                return;
+            }
+            
+            if (!session.hasUser(s.username())) {
+                sendFrame(s, "ERROR:not in session");
+                return;
+            }
+            
+            // Send all commands
+            List<WhiteboardSession.DrawCommand> commands = new ArrayList<>(session.getCommands());
+            
+            // Send count first
+            sendFrame(s, "WHITEBOARD_SYNC_START:" + commands.size());
+            
+            // Send each command
+            for (WhiteboardSession.DrawCommand cmd : commands) {
+                if ("clear".equals(cmd.type())) {
+                    sendFrame(s, "WHITEBOARD_CLEARED:" + cmd.username());
+                } else {
+                    sendFrame(s, String.format(
+                            "WHITEBOARD_COMMAND:%s:%.2f:%.2f:%.2f:%.2f:%s:%d",
+                            cmd.username(), cmd.x1(), cmd.y1(), cmd.x2(), cmd.y2(),
+                            cmd.color(), cmd.thickness()));
+                }
+            }
+            
+            sendFrame(s, "WHITEBOARD_SYNC_END");
+        } catch (NumberFormatException e) {
+            sendFrame(s, "ERROR:invalid session id");
+        }
     }
 
     public List<Map<String,Object>> usersSnapshot() {
