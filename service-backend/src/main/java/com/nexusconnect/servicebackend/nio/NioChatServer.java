@@ -1,5 +1,6 @@
 package com.nexusconnect.servicebackend.nio;
 
+import com.nexusconnect.servicebackend.user.UserCredentialService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,14 +21,9 @@ public class NioChatServer implements Runnable {
     private static final int HISTORY_LIMIT = 200;
 
     private final int port;
+    private final UserCredentialService credentialService;
     private final ExecutorService workers =
             Executors.newFixedThreadPool(Math.max(2, Runtime.getRuntime().availableProcessors() - 1));
-
-
-    private final Map<String, String> auth = Map.of(
-            "lakshan", "123", "kevin", "123", "alice", "a1", "bob", "b1"
-    );
-
 
     private final ConcurrentHashMap<String, Presence> online = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<SocketChannel, Session> sessions = new ConcurrentHashMap<>();
@@ -39,8 +35,9 @@ public class NioChatServer implements Runnable {
     private ServerSocketChannel server;
     private Thread selectorThread;
 
-    public NioChatServer(int port) {
+    public NioChatServer(int port, UserCredentialService credentialService) {
         this.port = port;
+        this.credentialService = credentialService;
     }
 
     public synchronized void start() throws IOException {
@@ -192,7 +189,7 @@ public class NioChatServer implements Runnable {
             sendFrame(s, "LOGIN_FAIL:missing credentials");
             return;
         }
-        if (!pass.equals(auth.get(user))) {
+        if (!credentialService.verifyCredentials(user, pass)) {
             sendFrame(s, "LOGIN_FAIL:bad credentials");
             return;
         }
@@ -320,6 +317,17 @@ public class NioChatServer implements Runnable {
         if (!verifyCredentials(user, pass)) {
             return new LoginResult(false, "bad creds", List.of(), recentMessages());
         }
+        return doHttpLogin(user, ip, fileTcp, voiceUdp);
+    }
+
+    public LoginResult loginHttpTrusted(String user, String ip, Integer fileTcp, Integer voiceUdp) {
+        if (user == null || !credentialService.userExists(user)) {
+            return new LoginResult(false, "unknown user", List.of(), recentMessages());
+        }
+        return doHttpLogin(user, ip, fileTcp, voiceUdp);
+    }
+
+    private LoginResult doHttpLogin(String user, String ip, Integer fileTcp, Integer voiceUdp) {
         int file = fileTcp != null ? fileTcp : -1;
         int voice = voiceUdp != null ? voiceUdp : -1;
         HttpPresence presence = new HttpPresence(user, ip, file, voice);
@@ -359,7 +367,7 @@ public class NioChatServer implements Runnable {
 
     public boolean verifyCredentials(String user, String pass) {
         if (user == null || pass == null) return false;
-        return pass.equals(auth.get(user));
+        return credentialService.verifyCredentials(user, pass);
     }
 
     public record Peer(String ip, int fileTcp, int voiceUdp, boolean viaNio) {}

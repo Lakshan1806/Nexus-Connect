@@ -1,12 +1,14 @@
 package com.nexusconnect.servicebackend.web;
 
 import com.nexusconnect.servicebackend.nio.NioChatServer;
+import com.nexusconnect.servicebackend.security.AuthenticatedUser;
 import com.nexusconnect.servicebackend.voice.VoiceSessionManager;
 import com.nexusconnect.servicebackend.web.dto.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
@@ -44,10 +46,13 @@ public class VoiceController {
      */
     @PostMapping("/initiate")
     public ResponseEntity<VoiceInitResponse> initiateVoiceSession(
+            @AuthenticationPrincipal AuthenticatedUser principal,
             @Valid @RequestBody VoiceInitRequest request,
             HttpServletRequest httpRequest) {
-
-        String initiator = request.initiator();
+        if (principal == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        String initiator = principal.username();
         String target = request.target();
         Integer localPort = request.localUdpPort();
 
@@ -166,8 +171,11 @@ public class VoiceController {
      * @return List of incoming call sessions (RINGING state)
      */
     @GetMapping("/incoming")
-    public ResponseEntity<?> getIncomingCalls(@RequestParam String user) {
-        var incomingCalls = voiceSessionManager.getIncomingCalls(user);
+    public ResponseEntity<?> getIncomingCalls(@AuthenticationPrincipal AuthenticatedUser principal) {
+        if (principal == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        var incomingCalls = voiceSessionManager.getIncomingCalls(principal.username());
 
         var response = incomingCalls.stream()
                 .map(session -> java.util.Map.of(
@@ -194,8 +202,12 @@ public class VoiceController {
      */
     @PostMapping("/accept/{sessionId}")
     public ResponseEntity<?> acceptCall(@PathVariable long sessionId,
+            @AuthenticationPrincipal AuthenticatedUser principal,
             @RequestBody java.util.Map<String, Object> body) {
-        String accepter = (String) body.get("accepter");
+        if (principal == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        String accepter = principal.username();
         Object portObj = body.get("localUdpPort");
 
         Integer localPort = null;
@@ -238,8 +250,11 @@ public class VoiceController {
      */
     @PostMapping("/reject/{sessionId}")
     public ResponseEntity<?> rejectCall(@PathVariable long sessionId,
-            @RequestParam String user) {
-        boolean rejected = voiceSessionManager.rejectSession(sessionId, user);
+            @AuthenticationPrincipal AuthenticatedUser principal) {
+        if (principal == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        boolean rejected = voiceSessionManager.rejectSession(sessionId, principal.username());
 
         if (!rejected) {
             return ResponseEntity.badRequest()
