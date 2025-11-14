@@ -5,6 +5,7 @@ import IncomingCallModal from "./IncomingCallModal.jsx";
 import LANDiscovery from "./LANDiscovery.jsx";
 import FileTransferModal from "./FileTransferModal.jsx";
 import WhiteboardCanvas from "./WhiteboardCanvas.jsx";
+import GameHubModal from "./GameHubModal.jsx";
 
 function ChatShell({
   activeUser,
@@ -32,6 +33,7 @@ function ChatShell({
   onRejectCall,
   voiceChat,
   whiteboard,
+  ticTacToe,
 }) {
   const refreshedAt = useMemo(() => {
     if (!lastRefreshed) return null;
@@ -46,11 +48,12 @@ function ChatShell({
   const peer =
     selectedUser?.user === session.user ? null : (peerDetails ?? selectedUser);
 
-   // State for LAN discovery modal
+  // State for LAN discovery modal
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
-  
   // State for file transfer modal
   const [fileTransferOpen, setFileTransferOpen] = useState(false);
+  // State for game hub
+  const [gameHubOpen, setGameHubOpen] = useState(false);
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-slate-950">
@@ -107,57 +110,75 @@ function ChatShell({
                   )
                 )}
 
-                 {/* Find LAN Peers Button */}
-                <button
-                  type="button"
-                  onClick={() => setDiscoveryOpen(true)}
-                  className="hover:border-brand-400 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-300 transition hover:text-white"
-                >
-                  <svg
-                    className="h-4 w-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Find LAN Peers Button */}
+                  <button
+                    type="button"
+                    onClick={() => setDiscoveryOpen(true)}
+                    className="hover:border-brand-400 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-300 transition hover:text-white"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                    />
-                  </svg>
-                  <span>Find LAN Peers</span>
-                </button>
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
+                      />
+                    </svg>
+                    <span>Find LAN Peers</span>
+                  </button>
 
-                {/* P2P File Transfer Button */}
-                <button
-                  type="button"
-                  onClick={() => setFileTransferOpen(true)}
-                  className="hover:border-brand-400 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-300 transition hover:text-white"
-                >
-                  <svg
-                    className="h-4 w-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
+                  {/* P2P File Transfer Button */}
+                  <button
+                    type="button"
+                    onClick={() => setFileTransferOpen(true)}
+                    className="hover:border-brand-400 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-300 transition hover:text-white"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                    />
-                  </svg>
-                  <span>File Transfer</span>
-                </button>
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                      />
+                    </svg>
+                    <span>File Transfer</span>
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={onLogout}
-                  className="hover:border-brand-400 rounded-xl border border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-300 transition hover:text-white"
-                >
-                  Log out
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setGameHubOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white transition hover:border-brand-300/70 hover:bg-brand-500/20"
+                  >
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6l7 4v4l-7 4-7-4V10l7-4z" />
+                    </svg>
+                    <span>Open Game Hub</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    className="hover:border-brand-400 rounded-xl border border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-300 transition hover:text-white"
+                  >
+                    Log out
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -361,17 +382,26 @@ function ChatShell({
         />
         
         {/* File Transfer Modal */}
-        <FileTransferModal
-          isOpen={fileTransferOpen}
-          onClose={() => setFileTransferOpen(false)}
-          selectedPeer={peer}
-          session={session}
-        />
+          <FileTransferModal
+            isOpen={fileTransferOpen}
+            onClose={() => setFileTransferOpen(false)}
+            selectedPeer={peer}
+            session={session}
+          />
 
-        {/* Whiteboard Canvas */}
-        <WhiteboardCanvas
-          whiteboard={whiteboard}
-          currentUser={session?.user}
+          {/* Game Hub Modal */}
+          <GameHubModal
+            open={gameHubOpen}
+            onClose={() => setGameHubOpen(false)}
+            currentUser={session?.user}
+            selectedUser={selectedUser}
+            ticTacToe={ticTacToe}
+          />
+
+          {/* Whiteboard Canvas */}
+          <WhiteboardCanvas
+            whiteboard={whiteboard}
+            currentUser={session?.user}
         />
       </div>
     </div>
