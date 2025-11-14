@@ -197,3 +197,32 @@ export async function closeWhiteboardSession(sessionId, username) {
 export async function fetchPendingWhiteboardSessions(username) {
   return request(`/api/whiteboard/pending/${encodeURIComponent(username)}`)
 }
+
+// TicTacToe -----------------------------------------------------------------
+
+export async function startTicTacToe(opponent) {
+  return request('/api/tictactoe/start', {
+    method: 'POST',
+    json: { opponent },
+  })
+}
+
+export async function fetchTicTacToeState() {
+  return request('/api/tictactoe/current').catch((error) => {
+    if (error.status === 204) return null
+    throw error
+  })
+}
+
+export async function makeTicTacToeMove(gameId, row, col) {
+  return request(`/api/tictactoe/move/${encodeURIComponent(gameId)}`, {
+    method: 'POST',
+    json: { row, col },
+  })
+}
+
+export async function resignTicTacToe(gameId) {
+  return request(`/api/tictactoe/resign/${encodeURIComponent(gameId)}`, {
+    method: 'POST',
+  })
+}
