@@ -1,9 +1,12 @@
 package com.nexusconnect.servicebackend.web;
 
+import com.nexusconnect.servicebackend.filetransfer.FileTransferService;
 import com.nexusconnect.servicebackend.nio.NioChatServer;
 import com.nexusconnect.servicebackend.web.dto.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
@@ -16,10 +19,13 @@ import java.util.Optional;
 @RequestMapping("/api/nio")
 @Validated
 public class NioBridgeController {
+    private static final Logger log = LoggerFactory.getLogger(NioBridgeController.class);
     private final NioChatServer nioChatServer;
+    private final FileTransferService fileTransferService;
 
-    public NioBridgeController(NioChatServer nioChatServer) {
+    public NioBridgeController(NioChatServer nioChatServer, FileTransferService fileTransferService) {
         this.nioChatServer = nioChatServer;
+        this.fileTransferService = fileTransferService;
     }
 
     @PostMapping("/login")
@@ -37,6 +43,17 @@ public class NioBridgeController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(LoginResponse.failure(result.reason()));
         }
+        
+        // Start file transfer server if user provided a fileTcp port
+        if (request.fileTcp() != null && request.fileTcp() > 0) {
+            boolean started = fileTransferService.startServerForUser(request.user(), request.fileTcp());
+            if (started) {
+                log.info("Started file transfer server for user '{}' on port {}", request.user(), request.fileTcp());
+            } else {
+                log.warn("Failed to start file transfer server for user '{}'", request.user());
+            }
+        }
+        
         List<OnlineUserDto> users = result.users().stream()
                 .map(OnlineUserDto::fromPresence)
                 .toList();
@@ -49,6 +66,10 @@ public class NioBridgeController {
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(@Valid @RequestBody LogoutRequest request) {
         boolean removed = nioChatServer.logoutHttp(request.user());
+        
+        // Stop file transfer server for user
+        fileTransferService.stopServerForUser(request.user());
+        
         return removed ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 
