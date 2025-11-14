@@ -2,6 +2,7 @@ package com.nexusconnect.servicebackend.voice;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -10,7 +11,10 @@ import java.util.concurrent.*;
  * Manages P2P voice sessions between two clients.
  * Handles session lifecycle, peer details exchange, and session cleanup.
  * Member 5 (P2P Real-time Voice Streaming - UDP) implementation.
+ * 
+ * Updated to support server-relay model for WebSocket-based voice streaming.
  */
+@Component
 public class VoiceSessionManager {
     private static final Logger log = LoggerFactory.getLogger(VoiceSessionManager.class);
     private static final long SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
