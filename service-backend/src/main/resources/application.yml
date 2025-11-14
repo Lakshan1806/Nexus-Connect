@@ -23,8 +23,20 @@ spring:
       mode: never
 
 jwt:
-  secret: ${JWT_SECRET:change-me-please-change-me-please-change-me}
+  secret: ${JWT_SECRET:netwrok-programming-nexus-connect}
   expiration: ${JWT_EXPIRATION_MS:3600000}
+
+app:
+  cors:
+    allowed-origins:
+      - http://localhost:5173
+      - http://127.0.0.1:5173
+      - http://localhost:4173
+      - http://127.0.0.1:4173
+      - http://192.168.*.*:*
+      - http://10.*.*.*:*
+      - http://172.*.*.*:*
+      - https://0c7vjbtk-5173.asse.devtunnels.ms
 
 nexus:
   nio:

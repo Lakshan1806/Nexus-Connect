@@ -76,6 +76,26 @@ function LoginScreen({
                     onChange={onChange("voiceUdp")}
                   />
                 </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-200" htmlFor="ipOverride">
+                    LAN IP override
+                  </label>
+                  <input
+                    id="ipOverride"
+                    type="text"
+                    inputMode="decimal"
+                    spellCheck="false"
+                    autoComplete="off"
+                    placeholder="e.g. 192.168.1.42"
+                    value={credentials.ipOverride}
+                    onChange={onChange("ipOverride")}
+                    className="focus:border-brand-400 focus:ring-brand-400/60 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 text-base text-slate-100 placeholder:text-slate-500 focus:ring-2 focus:outline-none"
+                  />
+                  <p className="text-xs text-slate-500">
+                    Optional: supply your local network IP so peers discovered over HTTPS can still reach your UDP
+                    or TCP ports directly.
+                  </p>
+                </div>
                 {loginError && (
                   <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
                     {loginError}
