@@ -4,43 +4,45 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketTimeoutException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * TCP-based P2P File Transfer Server
+ * NIO-based P2P File Transfer Server
  * Each user runs this on their advertised fileTcp port
- * Handles incoming file transfer requests from other peers
+ * Handles incoming file transfer requests from other peers using non-blocking I/O
  */
 public class FileTransferServer implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(FileTransferServer.class);
     private static final int BUFFER_SIZE = 8192;
-    private static final int SO_TIMEOUT = 30000; // 30 seconds
     private static final String DOWNLOAD_DIR = "nexus_downloads";
 
     private final int port;
     private final String username;
-    private final ExecutorService executor;
     private final Map<String, FileTransferProgress> activeTransfers;
+    private final Map<SocketChannel, TransferSession> activeSessions;
     
     private volatile boolean running = false;
-    private ServerSocket serverSocket;
-    private Thread acceptThread;
+    private ServerSocketChannel serverChannel;
+    private Selector selector;
+    private Thread selectorThread;
 
     public FileTransferServer(int port, String username) {
         this.port = port;
         this.username = username;
-        this.executor = Executors.newFixedThreadPool(5); // Max 5 concurrent transfers
         this.activeTransfers = new ConcurrentHashMap<>();
+        this.activeSessions = new ConcurrentHashMap<>();
     }
 
     public synchronized void start() throws IOException {
@@ -55,150 +57,187 @@ public class FileTransferServer implements Runnable {
             Files.createDirectories(downloadPath);
         }
 
-        serverSocket = new ServerSocket(port);
-        serverSocket.setSoTimeout(1000); // 1 second timeout for accept
+        // Initialize NIO server
+        selector = Selector.open();
+        serverChannel = ServerSocketChannel.open();
+        serverChannel.configureBlocking(false);
+        serverChannel.bind(new InetSocketAddress(port));
+        serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+        
         running = true;
 
-        acceptThread = new Thread(this, "file-transfer-accept-" + port);
-        acceptThread.start();
+        selectorThread = new Thread(this, "file-transfer-nio-" + port);
+        selectorThread.start();
 
-        log.info("FileTransferServer started for user '{}' on port {}", username, port);
+        log.info("NIO FileTransferServer started for user '{}' on port {}", username, port);
     }
 
     public synchronized void stop() {
         running = false;
         
         try {
-            if (serverSocket != null && !serverSocket.isClosed()) {
-                serverSocket.close();
+            if (selector != null) {
+                selector.wakeup();
             }
-        } catch (IOException e) {
-            log.error("Error closing server socket", e);
+        } catch (Exception e) {
+            log.error("Error waking selector", e);
         }
 
         try {
-            if (acceptThread != null) {
-                acceptThread.join(2000);
+            if (selectorThread != null) {
+                selectorThread.join(2000);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
 
-        executor.shutdownNow();
+        // Close all active sessions
+        activeSessions.keySet().forEach(channel -> {
+            try {
+                channel.close();
+            } catch (IOException e) {
+                log.error("Error closing channel", e);
+            }
+        });
+        activeSessions.clear();
+
+        try {
+            if (serverChannel != null && serverChannel.isOpen()) {
+                serverChannel.close();
+            }
+            if (selector != null && selector.isOpen()) {
+                selector.close();
+            }
+        } catch (IOException e) {
+            log.error("Error closing server resources", e);
+        }
+
         activeTransfers.clear();
         
-        log.info("FileTransferServer stopped for user '{}' on port {}", username, port);
+        log.info("NIO FileTransferServer stopped for user '{}' on port {}", username, port);
     }
 
     @Override
     public void run() {
         while (running) {
             try {
-                Socket clientSocket = serverSocket.accept();
-                executor.submit(() -> handleClient(clientSocket));
-            } catch (SocketTimeoutException e) {
-                // Normal timeout, continue
+                // Wait for events with 1 second timeout
+                int readyCount = selector.select(1000);
+                
+                if (!running) {
+                    break;
+                }
+
+                if (readyCount == 0) {
+                    continue;
+                }
+
+                Set<SelectionKey> selectedKeys = selector.selectedKeys();
+                Iterator<SelectionKey> keyIterator = selectedKeys.iterator();
+
+                while (keyIterator.hasNext()) {
+                    SelectionKey key = keyIterator.next();
+                    keyIterator.remove();
+
+                    if (!key.isValid()) {
+                        continue;
+                    }
+
+                    try {
+                        if (key.isAcceptable()) {
+                            handleAccept(key);
+                        } else if (key.isReadable()) {
+                            handleRead(key);
+                        } else if (key.isWritable()) {
+                            handleWrite(key);
+                        }
+                    } catch (Exception e) {
+                        log.error("Error handling key operation", e);
+                        closeChannel(key);
+                    }
+                }
+
             } catch (IOException e) {
                 if (running) {
-                    log.error("Error accepting connection", e);
+                    log.error("Error in selector loop", e);
                 }
             }
         }
     }
 
-    private void handleClient(Socket socket) {
-        String transferId = null;
+    private void handleAccept(SelectionKey key) throws IOException {
+        ServerSocketChannel serverSocketChannel = (ServerSocketChannel) key.channel();
+        SocketChannel clientChannel = serverSocketChannel.accept();
+        
+        if (clientChannel == null) {
+            return;
+        }
+
+        clientChannel.configureBlocking(false);
+        clientChannel.register(selector, SelectionKey.OP_READ);
+        
+        TransferSession session = new TransferSession(clientChannel);
+        activeSessions.put(clientChannel, session);
+        
+        log.info("Accepted new file transfer connection from: {}", 
+                clientChannel.getRemoteAddress());
+    }
+
+    private void handleRead(SelectionKey key) throws IOException {
+        SocketChannel channel = (SocketChannel) key.channel();
+        TransferSession session = activeSessions.get(channel);
+        
+        if (session == null) {
+            closeChannel(key);
+            return;
+        }
+
         try {
-            socket.setSoTimeout(SO_TIMEOUT);
+            session.read(channel);
             
-            DataInputStream in = new DataInputStream(socket.getInputStream());
-            DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-
-            // Protocol: SEND_FILE|transferId|filename|filesize|senderUsername
-            String header = in.readUTF();
-            String[] parts = header.split("\\|");
-            
-            if (parts.length < 5 || !parts[0].equals("SEND_FILE")) {
-                out.writeUTF("ERROR|Invalid protocol");
-                return;
+            if (session.isReadyToWrite()) {
+                key.interestOps(SelectionKey.OP_WRITE);
             }
-
-            transferId = parts[1];
-            String filename = parts[2];
-            long filesize = Long.parseLong(parts[3]);
-            String sender = parts[4];
-
-            log.info("Receiving file '{}' ({} bytes) from '{}' (transferId: {})", 
-                    filename, filesize, sender, transferId);
-
-            // Sanitize filename
-            filename = sanitizeFilename(filename);
-            Path outputPath = Paths.get(DOWNLOAD_DIR, filename);
-
-            // Check if file already exists, append number
-            int counter = 1;
-            while (Files.exists(outputPath)) {
-                String baseName = filename.substring(0, filename.lastIndexOf('.'));
-                String extension = filename.substring(filename.lastIndexOf('.'));
-                outputPath = Paths.get(DOWNLOAD_DIR, baseName + "_" + counter + extension);
-                counter++;
-            }
-
-            // Send acknowledgment
-            out.writeUTF("OK|" + outputPath.getFileName().toString());
-            out.flush();
-
-            // Create progress tracker
-            FileTransferProgress progress = new FileTransferProgress(
-                    transferId, filename, filesize, sender, username, true
-            );
-            activeTransfers.put(transferId, progress);
-
-            // Receive file data
-            try (FileOutputStream fos = new FileOutputStream(outputPath.toFile())) {
-                byte[] buffer = new byte[BUFFER_SIZE];
-                long remaining = filesize;
-                long lastLogTime = System.currentTimeMillis();
-
-                while (remaining > 0) {
-                    int toRead = (int) Math.min(buffer.length, remaining);
-                    int bytesRead = in.read(buffer, 0, toRead);
-                    
-                    if (bytesRead == -1) {
-                        throw new IOException("Unexpected end of stream");
-                    }
-
-                    fos.write(buffer, 0, bytesRead);
-                    remaining -= bytesRead;
-                    progress.addBytesTransferred(bytesRead);
-
-                    // Log progress every 2 seconds
-                    long now = System.currentTimeMillis();
-                    if (now - lastLogTime > 2000) {
-                        log.info("Transfer {}: {}/{}% complete", 
-                                transferId, progress.getBytesTransferred(), progress.getProgressPercent());
-                        lastLogTime = now;
-                    }
-                }
-
-                progress.markCompleted();
-                out.writeUTF("SUCCESS");
-                log.info("File transfer completed: {} -> {}", filename, outputPath);
-            }
-
         } catch (Exception e) {
-            log.error("Error handling file transfer (transferId: {})", transferId, e);
-            if (transferId != null) {
-                FileTransferProgress progress = activeTransfers.get(transferId);
-                if (progress != null) {
-                    progress.markFailed(e.getMessage());
-                }
+            log.error("Error reading from channel", e);
+            session.markFailed(e.getMessage());
+            closeChannel(key);
+        }
+    }
+
+    private void handleWrite(SelectionKey key) throws IOException {
+        SocketChannel channel = (SocketChannel) key.channel();
+        TransferSession session = activeSessions.get(channel);
+        
+        if (session == null) {
+            closeChannel(key);
+            return;
+        }
+
+        try {
+            session.write(channel);
+            
+            if (session.isReadComplete()) {
+                // Continue reading file data
+                key.interestOps(SelectionKey.OP_READ);
+            } else if (session.isTransferComplete()) {
+                log.info("Transfer complete for session: {}", session.getTransferId());
+                activeSessions.remove(channel);
+                closeChannel(key);
             }
-        } finally {
-            try {
-                socket.close();
-            } catch (IOException ignored) {
-            }
+        } catch (Exception e) {
+            log.error("Error writing to channel", e);
+            session.markFailed(e.getMessage());
+            closeChannel(key);
+        }
+    }
+
+    private void closeChannel(SelectionKey key) {
+        try {
+            key.cancel();
+            key.channel().close();
+        } catch (IOException e) {
+            log.error("Error closing channel", e);
         }
     }
 
@@ -216,6 +255,223 @@ public class FileTransferServer implements Runnable {
 
     public FileTransferProgress getTransferProgress(String transferId) {
         return activeTransfers.get(transferId);
+    }
+
+    /**
+     * Represents a file transfer session with NIO
+     */
+    private class TransferSession {
+        private enum State {
+            READING_HEADER,
+            WRITING_ACK,
+            READING_FILE_DATA,
+            WRITING_SUCCESS,
+            COMPLETED
+        }
+
+        private State state = State.READING_HEADER;
+        private final ByteBuffer readBuffer = ByteBuffer.allocate(BUFFER_SIZE);
+        private ByteBuffer writeBuffer;
+        
+        private String transferId;
+        private String filename;
+        private long filesize;
+        private String sender;
+        private Path outputPath;
+        private FileChannel fileChannel;
+        private long bytesReceived = 0;
+        private long lastLogTime;
+        private FileTransferProgress progress;
+
+        public TransferSession(SocketChannel channel) {
+            this.lastLogTime = System.currentTimeMillis();
+        }
+
+        public void read(SocketChannel channel) throws IOException {
+            int bytesRead = channel.read(readBuffer);
+            
+            if (bytesRead == -1) {
+                throw new IOException("Connection closed by peer");
+            }
+
+            if (state == State.READING_HEADER) {
+                readHeader();
+            } else if (state == State.READING_FILE_DATA) {
+                readFileData();
+            }
+        }
+
+        public void write(SocketChannel channel) throws IOException {
+            if (writeBuffer != null && writeBuffer.hasRemaining()) {
+                channel.write(writeBuffer);
+            }
+
+            if (writeBuffer != null && !writeBuffer.hasRemaining()) {
+                writeBuffer = null;
+                
+                if (state == State.WRITING_ACK) {
+                    state = State.READING_FILE_DATA;
+                } else if (state == State.WRITING_SUCCESS) {
+                    state = State.COMPLETED;
+                    if (progress != null) {
+                        progress.markCompleted();
+                    }
+                    closeFileChannel();
+                    log.info("File transfer completed: {} -> {}", filename, outputPath);
+                }
+            }
+        }
+
+        private void readHeader() throws IOException {
+            readBuffer.flip();
+            
+            // Check if we have enough data for the header (look for newline)
+            byte[] data = new byte[readBuffer.remaining()];
+            readBuffer.get(data);
+            String received = new String(data, StandardCharsets.UTF_8);
+            
+            if (!received.contains("\n")) {
+                // Need more data
+                readBuffer.compact();
+                return;
+            }
+
+            int newlineIndex = received.indexOf('\n');
+            String header = received.substring(0, newlineIndex);
+            
+            // Protocol: SEND_FILE|transferId|filename|filesize|senderUsername
+            String[] parts = header.split("\\|");
+            
+            if (parts.length < 5 || !parts[0].equals("SEND_FILE")) {
+                throw new IOException("Invalid protocol: " + header);
+            }
+
+            transferId = parts[1];
+            filename = parts[2];
+            filesize = Long.parseLong(parts[3]);
+            sender = parts[4];
+
+            log.info("Receiving file '{}' ({} bytes) from '{}' (transferId: {})", 
+                    filename, filesize, sender, transferId);
+
+            // Sanitize filename
+            filename = sanitizeFilename(filename);
+            outputPath = Paths.get(DOWNLOAD_DIR, filename);
+
+            // Check if file already exists, append number
+            int counter = 1;
+            while (Files.exists(outputPath)) {
+                int dotIndex = filename.lastIndexOf('.');
+                if (dotIndex > 0) {
+                    String baseName = filename.substring(0, dotIndex);
+                    String extension = filename.substring(dotIndex);
+                    outputPath = Paths.get(DOWNLOAD_DIR, baseName + "_" + counter + extension);
+                } else {
+                    outputPath = Paths.get(DOWNLOAD_DIR, filename + "_" + counter);
+                }
+                counter++;
+            }
+
+            // Open file channel for writing
+            fileChannel = FileChannel.open(outputPath, 
+                    StandardOpenOption.CREATE, 
+                    StandardOpenOption.WRITE, 
+                    StandardOpenOption.TRUNCATE_EXISTING);
+
+            // Create progress tracker
+            progress = new FileTransferProgress(
+                    transferId, filename, filesize, sender, username, true
+            );
+            activeTransfers.put(transferId, progress);
+
+            // Prepare acknowledgment
+            String ack = "OK|" + outputPath.getFileName().toString() + "\n";
+            writeBuffer = ByteBuffer.wrap(ack.getBytes(StandardCharsets.UTF_8));
+            state = State.WRITING_ACK;
+
+            // Put remaining data back for file reading
+            if (newlineIndex + 1 < received.length()) {
+                byte[] remaining = received.substring(newlineIndex + 1).getBytes(StandardCharsets.UTF_8);
+                readBuffer.clear();
+                readBuffer.put(remaining);
+            } else {
+                readBuffer.clear();
+            }
+        }
+
+        private void readFileData() throws IOException {
+            readBuffer.flip();
+            
+            long remainingBytes = filesize - bytesReceived;
+            int toWrite = (int) Math.min(readBuffer.remaining(), remainingBytes);
+            
+            if (toWrite > 0) {
+                // Limit the buffer to only write the needed bytes
+                ByteBuffer limitedBuffer = readBuffer.slice();
+                limitedBuffer.limit(toWrite);
+                
+                int written = fileChannel.write(limitedBuffer);
+                bytesReceived += written;
+                readBuffer.position(readBuffer.position() + written);
+                
+                if (progress != null) {
+                    progress.addBytesTransferred(written);
+                }
+
+                // Log progress every 2 seconds
+                long now = System.currentTimeMillis();
+                if (now - lastLogTime > 2000) {
+                    log.info("Transfer {}: {}/{}% complete", 
+                            transferId, bytesReceived, progress != null ? progress.getProgressPercent() : 0);
+                    lastLogTime = now;
+                }
+            }
+
+            readBuffer.compact();
+
+            // Check if transfer is complete
+            if (bytesReceived >= filesize) {
+                closeFileChannel();
+                
+                // Prepare success response
+                String success = "SUCCESS\n";
+                writeBuffer = ByteBuffer.wrap(success.getBytes(StandardCharsets.UTF_8));
+                state = State.WRITING_SUCCESS;
+            }
+        }
+
+        private void closeFileChannel() {
+            if (fileChannel != null && fileChannel.isOpen()) {
+                try {
+                    fileChannel.close();
+                } catch (IOException e) {
+                    log.error("Error closing file channel", e);
+                }
+            }
+        }
+
+        public void markFailed(String error) {
+            closeFileChannel();
+            if (progress != null) {
+                progress.markFailed(error);
+            }
+        }
+
+        public boolean isReadyToWrite() {
+            return writeBuffer != null && writeBuffer.hasRemaining();
+        }
+
+        public boolean isReadComplete() {
+            return state == State.READING_FILE_DATA && bytesReceived < filesize;
+        }
+
+        public boolean isTransferComplete() {
+            return state == State.COMPLETED;
+        }
+
+        public String getTransferId() {
+            return transferId;
+        }
     }
 
     public static class FileTransferProgress {
