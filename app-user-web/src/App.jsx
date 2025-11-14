@@ -17,6 +17,7 @@ import ChatShell from "./components/ChatShell.jsx"
 import IncomingWhiteboardModal from "./components/IncomingWhiteboardModal.jsx"
 import { useVoiceChat } from "./hooks/useVoiceChat.js"
 import { useWhiteboard } from "./hooks/useWhiteboard.js"
+import { useTicTacToe } from "./hooks/useTicTacToe.js"
 
 const POLL_INTERVAL_MS = 4000
 const TOKEN_STORAGE_KEY = "nexusconnect_token"
@@ -69,6 +70,7 @@ function App() {
 
   const voiceChat = useVoiceChat(API_BASE)
   const whiteboard = useWhiteboard()
+  const ticTacToe = useTicTacToe(session?.user)
 
   const sessionRef = useRef(session)
   useEffect(() => {
@@ -441,6 +443,7 @@ function App() {
         onRejectCall={voiceChat.rejectIncomingCall}
         voiceChat={voiceChat}
         whiteboard={whiteboard}
+        ticTacToe={ticTacToe}
       />
     </>
   )

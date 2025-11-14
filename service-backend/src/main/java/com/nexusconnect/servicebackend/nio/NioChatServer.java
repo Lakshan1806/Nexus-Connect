@@ -34,6 +34,11 @@ public class NioChatServer implements Runnable {
     private final ConcurrentHashMap<Long, WhiteboardSession> whiteboardSessions = new ConcurrentHashMap<>();
     private final AtomicLong whiteboardSessionIdCounter = new AtomicLong(0);
 
+    // TicTacToe sessions
+    private final ConcurrentHashMap<Long, TicTacToeGame> ticTacToeGames = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> ticTacToeByUser = new ConcurrentHashMap<>();
+    private final AtomicLong ticTacToeIdCounter = new AtomicLong(10_000);
+
 
     private volatile boolean running = false;
     private Selector selector;
@@ -537,6 +542,107 @@ public class NioChatServer implements Runnable {
         }
     }
 
+    // ========== TicTacToe Handler Methods ==========
+
+    public TicTacToeGameSnapshot startTicTacToe(String initiator, String opponent) {
+        if (initiator == null || opponent == null) {
+            throw new IllegalArgumentException("Both players are required");
+        }
+        if (initiator.equalsIgnoreCase(opponent)) {
+            throw new IllegalArgumentException("Cannot challenge yourself");
+        }
+        if (!online.containsKey(opponent)) {
+            throw new IllegalArgumentException("Opponent is not online");
+        }
+        if (ticTacToeByUser.containsKey(initiator) || ticTacToeByUser.containsKey(opponent)) {
+            throw new IllegalStateException("One of the players is already in a game");
+        }
+        long id = ticTacToeIdCounter.incrementAndGet();
+        TicTacToeGame game = new TicTacToeGame(id, initiator, opponent);
+        ticTacToeGames.put(id, game);
+        ticTacToeByUser.put(initiator, id);
+        ticTacToeByUser.put(opponent, id);
+        TicTacToeGameSnapshot snapshot = game.snapshot();
+        notifyTicTacToe(snapshot, "TICTACTOE_START");
+        return snapshot;
+    }
+
+    public TicTacToeGameSnapshot makeTicTacToeMove(long gameId, String player, int row, int col) {
+        TicTacToeGame game = requireTicTacToeGame(gameId);
+        TicTacToeGameSnapshot snapshot;
+        synchronized (game) {
+            game.ensureParticipant(player);
+            game.ensureInProgress();
+            game.ensureTurn(player);
+            game.placeSymbol(row, col, player);
+            snapshot = game.snapshot();
+        }
+        finalizeTicTacToeIfNeeded(game, snapshot);
+        notifyTicTacToe(snapshot, "TICTACTOE_UPDATE");
+        return snapshot;
+    }
+
+    public TicTacToeGameSnapshot resignTicTacToe(long gameId, String player) {
+        TicTacToeGame game = requireTicTacToeGame(gameId);
+        TicTacToeGameSnapshot snapshot;
+        synchronized (game) {
+            game.ensureParticipant(player);
+            if (!"IN_PROGRESS".equals(game.status)) {
+                return game.snapshot();
+            }
+            String winner = player.equals(game.playerX) ? game.playerO : game.playerX;
+            game.status = "RESIGNED";
+            game.winner = winner;
+            game.lastUpdated = System.currentTimeMillis();
+            snapshot = game.snapshot();
+        }
+        finalizeTicTacToeIfNeeded(game, snapshot);
+        notifyTicTacToe(snapshot, "TICTACTOE_RESIGN");
+        return snapshot;
+    }
+
+    public Optional<TicTacToeGameSnapshot> currentTicTacToeFor(String user) {
+        Long gameId = ticTacToeByUser.get(user);
+        if (gameId == null) {
+            return Optional.empty();
+        }
+        TicTacToeGame game = ticTacToeGames.get(gameId);
+        return game == null ? Optional.empty() : Optional.of(game.snapshot());
+    }
+
+    private TicTacToeGame requireTicTacToeGame(long id) {
+        TicTacToeGame game = ticTacToeGames.get(id);
+        if (game == null) {
+            throw new IllegalArgumentException("Game not found");
+        }
+        return game;
+    }
+
+    private void finalizeTicTacToeIfNeeded(TicTacToeGame game, TicTacToeGameSnapshot snapshot) {
+        if (!"IN_PROGRESS".equals(snapshot.status())) {
+            ticTacToeByUser.remove(game.playerX);
+            ticTacToeByUser.remove(game.playerO);
+            ticTacToeGames.remove(game.id);
+        }
+    }
+
+    private void notifyTicTacToe(TicTacToeGameSnapshot snapshot, String eventType) {
+        Session x = findSessionByUsername(snapshot.playerX());
+        Session o = findSessionByUsername(snapshot.playerO());
+        String frame = String.join(":",
+                eventType,
+                String.valueOf(snapshot.id()),
+                snapshot.status(),
+                snapshot.currentTurn() == null ? "-" : snapshot.currentTurn(),
+                snapshot.winner() == null ? "-" : snapshot.winner());
+        if (x != null) {
+            sendFrame(x, frame);
+        }
+        if (o != null) {
+            sendFrame(o, frame);
+        }
+    }
+
     public List<Map<String,Object>> usersSnapshot() {
         return online.values().stream().map(p -> {
             Map<String,Object> m = new LinkedHashMap<>();
@@ -774,5 +880,144 @@ public class NioChatServer implements Runnable {
         @Override public int fileTcp() { return fileTcp; }
         @Override public int voiceUdp() { return voiceUdp; }
         @Override public boolean viaNio() { return false; }
+    }
+
+    public record TicTacToeGameSnapshot(
+            long id,
+            String playerX,
+            String playerO,
+            String currentTurn,
+            String status,
+            String winner,
+            char[][] board,
+            String lastMoveBy,
+            Integer lastMoveRow,
+            Integer lastMoveCol,
+            long lastUpdated
+    ) {}
+
+    private static class TicTacToeGame {
+        final long id;
+        final String playerX;
+        final String playerO;
+        final char[][] board = new char[3][3];
+        volatile String currentTurn;
+        volatile String status = "IN_PROGRESS";
+        volatile String winner;
+        volatile String lastMoveBy;
+        volatile Integer lastMoveRow;
+        volatile Integer lastMoveCol;
+        volatile long lastUpdated;
+
+        TicTacToeGame(long id, String playerX, String playerO) {
+            this.id = id;
+            this.playerX = playerX;
+            this.playerO = playerO;
+            this.currentTurn = playerX;
+            this.lastUpdated = System.currentTimeMillis();
+        }
+
+        void ensureParticipant(String user) {
+            if (!playerX.equals(user) && !playerO.equals(user)) {
+                throw new IllegalArgumentException("Player is not part of this game");
+            }
+        }
+
+        void ensureInProgress() {
+            if (!"IN_PROGRESS".equals(status)) {
+                throw new IllegalStateException("Game already finished");
+            }
+        }
+
+        void ensureTurn(String user) {
+            if (!user.equals(currentTurn)) {
+                throw new IllegalStateException("Not your turn");
+            }
+        }
+
+        void placeSymbol(int row, int col, String user) {
+            if (row < 0 || row > 2 || col < 0 || col > 2) {
+                throw new IllegalArgumentException("Invalid cell");
+            }
+            if (board[row][col] != '\0') {
+                throw new IllegalArgumentException("Cell already taken");
+            }
+            char symbol = user.equals(playerX) ? 'X' : 'O';
+            board[row][col] = symbol;
+            lastMoveBy = user;
+            lastMoveRow = row;
+            lastMoveCol = col;
+            lastUpdated = System.currentTimeMillis();
+
+            char winnerSymbol = evaluateWinner();
+            if (winnerSymbol == 'X') {
+                status = "WON_X";
+                winner = playerX;
+                currentTurn = null;
+            } else if (winnerSymbol == 'O') {
+                status = "WON_O";
+                winner = playerO;
+                currentTurn = null;
+            } else if (isBoardFull()) {
+                status = "DRAW";
+                currentTurn = null;
+            } else {
+                currentTurn = user.equals(playerX) ? playerO : playerX;
+            }
+        }
+
+        private boolean isBoardFull() {
+            for (char[] rows : board) {
+                for (char cell : rows) {
+                    if (cell == '\0') {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        private char evaluateWinner() {
+            char[][] b = board;
+            int[][] lines = {
+                    {0,0,0,1,0,2},
+                    {1,0,1,1,1,2},
+                    {2,0,2,1,2,2},
+                    {0,0,1,0,2,0},
+                    {0,1,1,1,2,1},
+                    {0,2,1,2,2,2},
+                    {0,0,1,1,2,2},
+                    {0,2,1,1,2,0}
+            };
+            for (int[] line : lines) {
+                char a = b[line[0]][line[1]];
+                char c = b[line[2]][line[3]];
+                char d = b[line[4]][line[5]];
+                if (a != '\0' && a == c && c == d) {
+                    return a;
+                }
+            }
+            return '\0';
+        }
+
+        TicTacToeGameSnapshot snapshot() {
+            char[][] copy = new char[3][3];
+            for (int r = 0; r < 3; r++) {
+                System.arraycopy(board[r], 0, copy[r], 0, 3);
+            }
+            return new TicTacToeGameSnapshot(
+                    id,
+                    playerX,
+                    playerO,
+                    currentTurn,
+                    status,
+                    winner,
+                    copy,
+                    lastMoveBy,
+                    lastMoveRow,
+                    lastMoveCol,
+                    lastUpdated
+            );
+        }
     }
 }
